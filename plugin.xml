@@ -1,0 +1,25 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<plugin>
+    <class>org.igniterealtime.openfire.plugins.kanban.KanbanPlugin</class>
+    <name>Kanban</name>
+    <description>Provides collaborative Kanban boards in Openfire.</description>
+    <author>Openfire Community</author>
+    <version>${project.version}</version>
+    <date>2026-08-02</date>
+    <minServerVersion>5.1.1</minServerVersion>
+    <databaseKey>kanban</databaseKey>
+    <databaseVersion>1</databaseVersion>
+    <licenseType>apache</licenseType>
+    <csrfProtectionEnabled>true</csrfProtectionEnabled>
+
+    <adminconsole>
+        <tab id="tab-server">
+            <sidebar id="sidebar-server-settings">
+                <item id="kanban-settings"
+                      name="${kanban.sidebar.settings}"
+                      url="kanban-settings.jsp"
+                      description="${kanban.sidebar.settings.desc}" />
+            </sidebar>
+        </tab>
+    </adminconsole>
+</plugin>
