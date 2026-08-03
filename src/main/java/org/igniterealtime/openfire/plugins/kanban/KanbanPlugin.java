@@ -49,13 +49,14 @@ public final class KanbanPlugin implements Plugin {
             () -> java.util.UUID.randomUUID().toString(), DEFAULT_WIP_LIMIT::getValue,
             actor -> !ADMINS_ONLY_BOARD_CREATION.getValue()
                 || AdminManager.getInstance().isUserAdmin(new JID(actor), false));
-        component = new KanbanComponent(service, "pubsub." + domain);
+        final OpenfirePubSubPublisher publisher = new OpenfirePubSubPublisher(new JID("kanban." + domain));
+        component = new KanbanComponent(service, "pubsub." + domain, publisher);
         try {
             InternalComponentManager.getInstance().addComponent("kanban", component);
         } catch (ComponentException exception) {
             throw new IllegalStateException("Unable to register kanban." + domain, exception);
         }
-        outboxWorker = new OutboxWorker(repository, new OpenfirePubSubPublisher(new JID("kanban." + domain)));
+        outboxWorker = new OutboxWorker(repository, publisher);
         outboxTask = safeTask("outbox", outboxWorker);
         TaskEngine.getInstance().scheduleAtFixedRate(outboxTask, Instant.now(), Duration.ofSeconds(1));
         retentionTask = safeTask("retention", this::purgeHistory);

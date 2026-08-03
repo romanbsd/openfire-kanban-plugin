@@ -10,7 +10,10 @@ import java.util.Optional;
 
 import org.igniterealtime.openfire.plugins.kanban.model.Board;
 import org.igniterealtime.openfire.plugins.kanban.model.Card;
+import org.igniterealtime.openfire.plugins.kanban.model.CardPriority;
 import org.igniterealtime.openfire.plugins.kanban.model.KanbanColumn;
+import org.igniterealtime.openfire.plugins.kanban.model.Label;
+import org.igniterealtime.openfire.plugins.kanban.model.LabelColor;
 import org.igniterealtime.openfire.plugins.kanban.model.Member;
 import org.igniterealtime.openfire.plugins.kanban.model.Role;
 import org.igniterealtime.openfire.plugins.kanban.outbox.OutboxKind;
@@ -98,8 +101,9 @@ public final class JdbcKanbanRepository {
     public static final class Transaction {
         private static final String BOARD_COLUMNS = "boardID,name,revision,createdBy,createdAt,updatedAt";
         private static final String CARD_COLUMNS =
-            "cardID,boardID,columnID,revision,rank,title,description,assigneeJID,deleted,createdBy,createdAt,updatedAt,deletedAt";
+            "cardID,boardID,columnID,revision,rank,title,description,assigneeJID,priority,deleted,createdBy,createdAt,updatedAt,deletedAt";
         private static final String COLUMN_COLUMNS = "columnID,boardID,name,rank,wipLimit,createdAt";
+        private static final String LABEL_COLUMNS = "labelID,boardID,name,color,createdAt";
         private static final String MEMBER_COLUMNS = "memberID,boardID,bareJID,role,createdAt";
 
         @FunctionalInterface
@@ -119,8 +123,14 @@ public final class JdbcKanbanRepository {
         }
 
         public Optional<Card> card(String cardId) throws SQLException {
-            return queryOne("SELECT " + CARD_COLUMNS + " FROM ofKanbanCard WHERE cardID=?",
+            final Optional<Card> card = queryOne("SELECT " + CARD_COLUMNS + " FROM ofKanbanCard WHERE cardID=?",
                 Transaction::readCard, cardId);
+            return card.isEmpty() ? card : Optional.of(withLabels(card.get()));
+        }
+
+        public Optional<Label> label(String labelId) throws SQLException {
+            return queryOne("SELECT " + LABEL_COLUMNS + " FROM ofKanbanLabel WHERE labelID=?",
+                Transaction::readLabel, labelId);
         }
 
         public Optional<KanbanColumn> column(String columnId) throws SQLException {
@@ -145,15 +155,27 @@ public final class JdbcKanbanRepository {
         }
 
         public List<Card> cards(String boardId) throws SQLException {
-            return queryList("SELECT " + CARD_COLUMNS
+            return withLabels(queryList("SELECT " + CARD_COLUMNS
                 + " FROM ofKanbanCard WHERE boardID=? AND deleted=0 ORDER BY columnID,rank",
-                Transaction::readCard, boardId);
+                Transaction::readCard, boardId));
         }
 
         public List<Card> cardsInColumn(String columnId) throws SQLException {
-            return queryList("SELECT " + CARD_COLUMNS
+            return withLabels(queryList("SELECT " + CARD_COLUMNS
                 + " FROM ofKanbanCard WHERE columnID=? AND deleted=0 ORDER BY rank FOR UPDATE",
-                Transaction::readCard, columnId);
+                Transaction::readCard, columnId));
+        }
+
+        public List<Card> cardsWithLabel(String boardId, String labelId) throws SQLException {
+            return withLabels(queryList("SELECT " + prefixedCardColumns("c")
+                + " FROM ofKanbanCard c JOIN ofKanbanCardLabel cl ON c.cardID=cl.cardID"
+                + " WHERE c.boardID=? AND cl.labelID=? AND c.deleted=0 ORDER BY c.columnID,c.rank FOR UPDATE",
+                Transaction::readCard, boardId, labelId));
+        }
+
+        public List<Label> labels(String boardId) throws SQLException {
+            return queryList("SELECT " + LABEL_COLUMNS + " FROM ofKanbanLabel WHERE boardID=? ORDER BY createdAt,labelID",
+                Transaction::readLabel, boardId);
         }
 
         public List<Member> members(String boardId) throws SQLException {
@@ -172,9 +194,16 @@ public final class JdbcKanbanRepository {
         }
 
         public void insertCard(Card card) throws SQLException {
-            execute("INSERT INTO ofKanbanCard(cardID,boardID,columnID,revision,rank,title,description,assigneeJID,deleted,createdBy,createdAt,updatedAt,deletedAt) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)",
+            execute("INSERT INTO ofKanbanCard(cardID,boardID,columnID,revision,rank,title,description,assigneeJID,priority,deleted,createdBy,createdAt,updatedAt,deletedAt) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
                 card.id(), card.boardId(), card.columnId(), card.revision(), card.rank(), card.title(), card.description(),
-                card.assigneeJid(), card.deleted() ? 1 : 0, card.createdBy(), card.createdAt(), card.updatedAt(), card.deletedAt());
+                card.assigneeJid(), card.priority().name(), card.deleted() ? 1 : 0, card.createdBy(), card.createdAt(),
+                card.updatedAt(), card.deletedAt());
+            replaceCardLabels(card.id(), card.labelIds());
+        }
+
+        public void insertLabel(Label label) throws SQLException {
+            execute("INSERT INTO ofKanbanLabel(labelID,boardID,name,color,createdAt) VALUES(?,?,?,?,?)",
+                label.id(), label.boardId(), label.name(), label.color().name(), label.createdAt());
         }
 
         public void insertMember(Member member) throws SQLException {
@@ -187,9 +216,23 @@ public final class JdbcKanbanRepository {
         }
 
         public boolean updateCard(Card card, long expectedRevision) throws SQLException {
-            return execute("UPDATE ofKanbanCard SET columnID=?,revision=revision+1,rank=?,title=?,description=?,assigneeJID=?,deleted=?,updatedAt=?,deletedAt=? WHERE cardID=? AND revision=? AND deleted=0",
-                card.columnId(), card.rank(), card.title(), card.description(), card.assigneeJid(), card.deleted() ? 1 : 0,
-                card.updatedAt(), card.deletedAt(), card.id(), expectedRevision) == 1;
+            final boolean updated = execute("UPDATE ofKanbanCard SET columnID=?,revision=revision+1,rank=?,title=?,description=?,assigneeJID=?,priority=?,deleted=?,updatedAt=?,deletedAt=? WHERE cardID=? AND revision=? AND deleted=0",
+                card.columnId(), card.rank(), card.title(), card.description(), card.assigneeJid(), card.priority().name(),
+                card.deleted() ? 1 : 0, card.updatedAt(), card.deletedAt(), card.id(), expectedRevision) == 1;
+            if (updated) {
+                replaceCardLabels(card.id(), card.labelIds());
+            }
+            return updated;
+        }
+
+        public void updateLabel(Label label) throws SQLException {
+            execute("UPDATE ofKanbanLabel SET name=?,color=? WHERE labelID=?",
+                label.name(), label.color().name(), label.id());
+        }
+
+        public void deleteLabel(String labelId) throws SQLException {
+            execute("DELETE FROM ofKanbanCardLabel WHERE labelID=?", labelId);
+            execute("DELETE FROM ofKanbanLabel WHERE labelID=?", labelId);
         }
 
         public void updateCardRank(String cardId, String rank) throws SQLException {
@@ -324,6 +367,34 @@ public final class JdbcKanbanRepository {
             }
         }
 
+        private void replaceCardLabels(String cardId, List<String> labelIds) throws SQLException {
+            execute("DELETE FROM ofKanbanCardLabel WHERE cardID=?", cardId);
+            for (int index = 0; index < labelIds.size(); index++) {
+                execute("INSERT INTO ofKanbanCardLabel(cardID,labelID,position) VALUES(?,?,?)",
+                    cardId, labelIds.get(index), index);
+            }
+        }
+
+        private Card withLabels(Card card) throws SQLException {
+            final List<String> labelIds = queryList(
+                "SELECT labelID FROM ofKanbanCardLabel WHERE cardID=? ORDER BY position", result -> result.getString(1), card.id());
+            return new Card(card.id(), card.boardId(), card.columnId(), card.revision(), card.rank(), card.title(),
+                card.description(), card.assigneeJid(), card.priority(), labelIds, card.deleted(), card.createdBy(),
+                card.createdAt(), card.updatedAt(), card.deletedAt());
+        }
+
+        private List<Card> withLabels(List<Card> cards) throws SQLException {
+            final List<Card> hydrated = new ArrayList<>(cards.size());
+            for (Card card : cards) {
+                hydrated.add(withLabels(card));
+            }
+            return List.copyOf(hydrated);
+        }
+
+        private static String prefixedCardColumns(String alias) {
+            return alias + "." + CARD_COLUMNS.replace(",", "," + alias + ".");
+        }
+
         private static Board readBoard(ResultSet result) throws SQLException {
             return new Board(result.getString(1), result.getString(2), result.getLong(3), result.getString(4), result.getLong(5), result.getLong(6));
         }
@@ -333,11 +404,17 @@ public final class JdbcKanbanRepository {
         }
 
         private static Card readCard(ResultSet result) throws SQLException {
-            final long deletedAt = result.getLong(13);
+            final long deletedAt = result.getLong(14);
             final boolean deletedAtWasNull = result.wasNull();
             return new Card(result.getString(1), result.getString(2), result.getString(3), result.getLong(4), result.getString(5),
-                result.getString(6), result.getString(7), result.getString(8), result.getInt(9) != 0, result.getString(10),
-                result.getLong(11), result.getLong(12), deletedAtWasNull ? null : deletedAt);
+                result.getString(6), result.getString(7), result.getString(8), CardPriority.valueOf(result.getString(9)),
+                List.of(), result.getInt(10) != 0, result.getString(11), result.getLong(12), result.getLong(13),
+                deletedAtWasNull ? null : deletedAt);
+        }
+
+        private static Label readLabel(ResultSet result) throws SQLException {
+            return new Label(result.getString(1), result.getString(2), result.getString(3),
+                LabelColor.valueOf(result.getString(4)), result.getLong(5));
         }
 
         private static Member readMember(ResultSet result) throws SQLException {

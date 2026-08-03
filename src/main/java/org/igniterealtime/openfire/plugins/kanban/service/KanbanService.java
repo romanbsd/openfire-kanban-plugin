@@ -4,12 +4,14 @@ import static org.igniterealtime.openfire.plugins.kanban.xml.KanbanXml.boardXml;
 import static org.igniterealtime.openfire.plugins.kanban.xml.KanbanXml.cardXml;
 import static org.igniterealtime.openfire.plugins.kanban.xml.KanbanXml.columnXml;
 import static org.igniterealtime.openfire.plugins.kanban.xml.KanbanXml.eventXml;
+import static org.igniterealtime.openfire.plugins.kanban.xml.KanbanXml.labelXml;
 import static org.igniterealtime.openfire.plugins.kanban.xml.KanbanXml.memberXml;
 import static org.igniterealtime.openfire.plugins.kanban.xml.KanbanXml.tombstoneXml;
 
 import java.sql.SQLException;
 import java.time.Clock;
 import java.util.ArrayList;
+import java.util.HashSet;
 import java.util.List;
 import java.util.Objects;
 import java.util.UUID;
@@ -22,7 +24,10 @@ import org.igniterealtime.openfire.plugins.kanban.model.ActivityType;
 import org.igniterealtime.openfire.plugins.kanban.model.BoardNodes;
 import org.igniterealtime.openfire.plugins.kanban.model.BoardSnapshot;
 import org.igniterealtime.openfire.plugins.kanban.model.Card;
+import org.igniterealtime.openfire.plugins.kanban.model.CardPriority;
 import org.igniterealtime.openfire.plugins.kanban.model.KanbanColumn;
+import org.igniterealtime.openfire.plugins.kanban.model.Label;
+import org.igniterealtime.openfire.plugins.kanban.model.LabelColor;
 import org.igniterealtime.openfire.plugins.kanban.model.Member;
 import org.igniterealtime.openfire.plugins.kanban.model.Role;
 import org.igniterealtime.openfire.plugins.kanban.outbox.OutboxKind;
@@ -44,11 +49,22 @@ public final class KanbanService {
         }
     }
 
-    public record CardPatch(FieldPatch<String> title, FieldPatch<String> description, FieldPatch<String> assigneeJid) {
+    public record CardPatch(
+        FieldPatch<String> title, FieldPatch<String> description, FieldPatch<String> assigneeJid,
+        FieldPatch<CardPriority> priority, FieldPatch<List<String>> labelIds
+    ) {
         public CardPatch {
             Objects.requireNonNull(title, "title");
             Objects.requireNonNull(description, "description");
             Objects.requireNonNull(assigneeJid, "assigneeJid");
+            Objects.requireNonNull(priority, "priority");
+            Objects.requireNonNull(labelIds, "labelIds");
+        }
+
+        public CardPatch(
+            FieldPatch<String> title, FieldPatch<String> description, FieldPatch<String> assigneeJid
+        ) {
+            this(title, description, assigneeJid, FieldPatch.absent(), FieldPatch.absent());
         }
     }
 
@@ -112,7 +128,7 @@ public final class KanbanService {
 
     public Result<Card> createCard(
         String actor, String boardId, String columnId, String title, String description,
-        String assigneeJid, long expectedRevision
+        String assigneeJid, CardPriority priority, List<String> labelIds, long expectedRevision
     ) {
         return repository.transact(transaction -> {
             final Board board = requireBoardMutation(transaction, boardId, actor, Permission.CREATE, expectedRevision);
@@ -121,9 +137,11 @@ public final class KanbanService {
             enforceWip(column, cards.size() + 1);
             final String rank = rankBetween(transaction, cards, null, null);
             final long now = clock.millis();
+            final List<String> normalizedLabelIds = validateLabelIds(transaction, boardId, labelIds);
             final Card card = new Card(idGenerator.get(), boardId, columnId, 1, rank,
                 requireText(title, "Card title", 255), normalizeNullable(description, 100_000),
-                normalizeNullable(assigneeJid, 1024), false, actor, now, now, null);
+                normalizeNullable(assigneeJid, 1024), Objects.requireNonNull(priority), normalizedLabelIds,
+                false, actor, now, now, null);
             incrementBoard(transaction, board, expectedRevision, now);
             transaction.insertCard(card);
             appendEvent(transaction, boardId, ActivityType.CARD_CREATED, actor, card.id(), cardXml(card), now, true);
@@ -131,18 +149,31 @@ public final class KanbanService {
         });
     }
 
+    public Result<Card> createCard(
+        String actor, String boardId, String columnId, String title, String description,
+        String assigneeJid, long expectedRevision
+    ) {
+        return createCard(actor, boardId, columnId, title, description, assigneeJid,
+            CardPriority.NONE, List.of(), expectedRevision);
+    }
+
     public Result<Card> updateCard(String actor, String cardId, long expectedRevision, CardPatch patch) {
-        if (!patch.title().present() && !patch.description().present() && !patch.assigneeJid().present()) {
+        if (!patch.title().present() && !patch.description().present() && !patch.assigneeJid().present()
+            && !patch.priority().present() && !patch.labelIds().present()) {
             throw error(KanbanException.Code.BAD_REQUEST, "At least one card field must be supplied");
         }
         return repository.transact(transaction -> {
             final CardMutation mutation = requireCardMutation(
                 transaction, cardId, actor, Permission.EDIT, expectedRevision);
             final Card current = mutation.card();
+            final List<String> labelIds = patch.labelIds().present()
+                ? validateLabelIds(transaction, current.boardId(), patch.labelIds().value()) : current.labelIds();
             final Card updated = current.update(
                 patch.title().present() ? requireText(patch.title().value(), "Card title", 255) : current.title(),
                 patch.description().present() ? normalizeNullable(patch.description().value(), 100_000) : current.description(),
                 patch.assigneeJid().present() ? normalizeNullable(patch.assigneeJid().value(), 1024) : current.assigneeJid(),
+                patch.priority().present() ? Objects.requireNonNull(patch.priority().value()) : current.priority(),
+                labelIds,
                 clock.millis());
             updateCard(transaction, updated, expectedRevision);
             appendEvent(transaction, current.boardId(), ActivityType.CARD_UPDATED,
@@ -187,6 +218,68 @@ public final class KanbanService {
             appendEvent(transaction, current.boardId(), ActivityType.CARD_DELETED,
                 actor, cardId, tombstoneXml(deleted), now, true);
             return new Result<>(deleted, mutation.board().revision());
+        });
+    }
+
+    public Result<Label> createLabel(
+        String actor, String boardId, String name, LabelColor color, long expectedRevision
+    ) {
+        return repository.transact(transaction -> {
+            final Board board = requireBoardMutation(transaction, boardId, actor, Permission.CREATE, expectedRevision);
+            final String normalizedName = uniqueLabelName(transaction, boardId, null, name);
+            final long now = clock.millis();
+            final Label label = new Label(idGenerator.get(), boardId, normalizedName, Objects.requireNonNull(color), now);
+            incrementBoard(transaction, board, expectedRevision, now);
+            transaction.insertLabel(label);
+            appendEvent(transaction, boardId, ActivityType.LABEL_CREATED,
+                actor, label.id(), labelXml(label), now, false);
+            return new Result<>(label, expectedRevision + 1);
+        });
+    }
+
+    public Result<Label> updateLabel(
+        String actor, String boardId, String labelId, FieldPatch<String> name,
+        FieldPatch<LabelColor> color, long expectedRevision
+    ) {
+        if (!name.present() && !color.present()) {
+            throw error(KanbanException.Code.BAD_REQUEST, "At least one label field must be supplied");
+        }
+        return repository.transact(transaction -> {
+            final Board board = requireBoardMutation(transaction, boardId, actor, Permission.CREATE, expectedRevision);
+            final Label current = requireCatalogLabel(transaction, boardId, labelId);
+            final Label updated = new Label(current.id(), boardId,
+                name.present() ? uniqueLabelName(transaction, boardId, labelId, name.value()) : current.name(),
+                color.present() ? Objects.requireNonNull(color.value()) : current.color(), current.createdAt());
+            final long now = clock.millis();
+            incrementBoard(transaction, board, expectedRevision, now);
+            transaction.updateLabel(updated);
+            appendEvent(transaction, boardId, ActivityType.LABEL_UPDATED,
+                actor, labelId, labelXml(updated), now, false);
+            return new Result<>(updated, expectedRevision + 1);
+        });
+    }
+
+    public Result<Label> deleteLabel(
+        String actor, String boardId, String labelId, long expectedRevision
+    ) {
+        return repository.transact(transaction -> {
+            final Board board = requireBoardMutation(transaction, boardId, actor, Permission.CREATE, expectedRevision);
+            final Label label = requireCatalogLabel(transaction, boardId, labelId);
+            final List<Card> affected = transaction.cardsWithLabel(boardId, labelId);
+            final long now = clock.millis();
+            incrementBoard(transaction, board, expectedRevision, now);
+            for (Card card : affected) {
+                final List<String> remaining = card.labelIds().stream().filter(id -> !id.equals(labelId)).toList();
+                final Card updated = card.update(card.title(), card.description(), card.assigneeJid(),
+                    card.priority(), remaining, now);
+                updateCard(transaction, updated, card.revision());
+                appendEvent(transaction, boardId, ActivityType.CARD_UPDATED,
+                    actor, card.id(), cardXml(updated), now, true);
+            }
+            transaction.deleteLabel(labelId);
+            appendEvent(transaction, boardId, ActivityType.LABEL_DELETED,
+                actor, labelId, labelXml(label), now, false);
+            return new Result<>(label, expectedRevision + 1);
         });
     }
 
@@ -249,8 +342,49 @@ public final class KanbanService {
         return repository.transact(transaction -> {
             requireRole(transaction, boardId, actor);
             return new BoardSnapshot(requireBoard(transaction, boardId), transaction.columns(boardId),
-                transaction.cards(boardId), transaction.members(boardId));
+                transaction.cards(boardId), transaction.labels(boardId), transaction.members(boardId));
         });
+    }
+
+    private static List<String> validateLabelIds(Transaction transaction, String boardId, List<String> labelIds)
+        throws SQLException {
+        if (labelIds == null || labelIds.size() > 8 || new HashSet<>(labelIds).size() != labelIds.size()) {
+            throw error(KanbanException.Code.BAD_REQUEST, "Cards accept at most 8 distinct labels");
+        }
+        for (String labelId : labelIds) {
+            requireLabelReference(transaction, boardId, labelId);
+        }
+        return List.copyOf(labelIds);
+    }
+
+    private static Label requireLabelReference(Transaction transaction, String boardId, String labelId) throws SQLException {
+        final Label label = transaction.label(labelId)
+            .orElseThrow(() -> error(KanbanException.Code.BAD_REQUEST, "Label does not exist on this board"));
+        if (!label.boardId().equals(boardId)) {
+            throw error(KanbanException.Code.BAD_REQUEST, "Label does not exist on this board");
+        }
+        return label;
+    }
+
+    private static Label requireCatalogLabel(Transaction transaction, String boardId, String labelId) throws SQLException {
+        final Label label = transaction.label(labelId)
+            .orElseThrow(() -> error(KanbanException.Code.ITEM_NOT_FOUND, "Label not found"));
+        if (!label.boardId().equals(boardId)) {
+            throw error(KanbanException.Code.ITEM_NOT_FOUND, "Label not found");
+        }
+        return label;
+    }
+
+    private static String uniqueLabelName(
+        Transaction transaction, String boardId, String excludedLabelId, String value
+    ) throws SQLException {
+        final String normalized = requireText(value, "Label name", 32);
+        final boolean duplicate = transaction.labels(boardId).stream()
+            .anyMatch(label -> !label.id().equals(excludedLabelId) && label.name().equalsIgnoreCase(normalized));
+        if (duplicate) {
+            throw error(KanbanException.Code.BAD_REQUEST, "Label name already exists on this board");
+        }
+        return normalized;
     }
 
     private String rankBetween(

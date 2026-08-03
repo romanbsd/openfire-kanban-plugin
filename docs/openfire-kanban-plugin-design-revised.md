@@ -126,6 +126,8 @@ Plugin-owned tables:
     ofKanbanBoard
     ofKanbanColumn
     ofKanbanCard
+    ofKanbanLabel
+    ofKanbanCardLabel
     ofKanbanComment
     ofKanbanAttachment
     ofKanbanActivity
@@ -133,6 +135,11 @@ Plugin-owned tables:
     ofKanbanOutbox
 
 Never modify Openfire core tables.
+
+`ofKanbanCard.priority` stores the closed class-of-service enum.
+`ofKanbanLabel` owns each board's label catalog, while `ofKanbanCardLabel`
+stores ordered card membership. Label deletion removes membership in the same
+transaction and republishes affected card snapshots through the outbox.
 
 ------------------------------------------------------------------------
 
@@ -309,13 +316,12 @@ grant or revoke access to both board nodes. Delivered outbox rows and activity
 history are purged daily according to the retention setting; a monotonic board
 sequence counter prevents sequence reuse after retention.
 
-Comments and attachments remain outside Milestone 0. The draft protocol areas
-that required implementation-specific decisions are recorded in
-`docs/protoxep-gap-analysis.md`.
+Comments and attachments remain outside Milestone 0. Implementation-specific
+wire decisions are recorded in Appendix C of `docs/protoxep-xmpp-kanban.md`.
 -   IQ handlers remain thin
 -   Services own business logic
 -   Immutable command objects where practical
--   Versioned database migrations
+-   Squashed initial database schema until the first release
 -   Comprehensive integration tests
 
 ------------------------------------------------------------------------

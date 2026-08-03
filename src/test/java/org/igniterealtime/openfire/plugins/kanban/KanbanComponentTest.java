@@ -44,6 +44,27 @@ class KanbanComponentTest {
     }
 
     @Test
+    void answersOpenfireRegistrationDiscoProbeWithoutAUserIdentity() throws Exception {
+        final KanbanComponent component = new KanbanComponent(mock(KanbanService.class), "pubsub.example.org");
+        final ComponentManager manager = mock(ComponentManager.class);
+        final AtomicReference<Packet> sent = new AtomicReference<>();
+        component.initialize(new JID("kanban.example.org"), manager);
+        doAnswer(invocation -> {
+            sent.set(invocation.getArgument(1));
+            return null;
+        }).when(manager).sendPacket(eq(component), any(Packet.class));
+
+        final IQ probe = command(IQ.Type.get, "query", "example.org");
+        probe.setChildElement("query", "http://jabber.org/protocol/disco#info");
+        component.processPacket(probe);
+
+        final IQ response = (IQ) sent.get();
+        assertEquals(IQ.Type.result, response.getType());
+        assertNotNull(response.getChildElement().element("identity"));
+        assertEquals("collaboration", response.getChildElement().element("identity").attributeValue("category"));
+    }
+
+    @Test
     void rejectsUnknownSendersAndServesAuthorizedDiscoveryAndCommands() throws Exception {
         final KanbanService service = new KanbanService(TestDatabase.repository(), 0);
         final KanbanComponent component = new KanbanComponent(service, "pubsub.example.org");

@@ -1,17 +1,24 @@
 package org.igniterealtime.openfire.plugins.kanban.xml;
 
+import java.util.ArrayList;
+import java.util.List;
 import java.util.Locale;
+import java.util.Objects;
 
 import org.dom4j.Element;
 import org.igniterealtime.openfire.plugins.kanban.model.Board;
 import org.igniterealtime.openfire.plugins.kanban.model.BoardNodes;
 import org.igniterealtime.openfire.plugins.kanban.model.BoardSnapshot;
 import org.igniterealtime.openfire.plugins.kanban.model.Card;
+import org.igniterealtime.openfire.plugins.kanban.model.CardPriority;
 import org.igniterealtime.openfire.plugins.kanban.model.KanbanColumn;
+import org.igniterealtime.openfire.plugins.kanban.model.Label;
+import org.igniterealtime.openfire.plugins.kanban.model.LabelColor;
 import org.igniterealtime.openfire.plugins.kanban.model.Member;
 import org.igniterealtime.openfire.plugins.kanban.model.Identified;
 import org.igniterealtime.openfire.plugins.kanban.model.Revisioned;
 import org.igniterealtime.openfire.plugins.kanban.model.Role;
+import org.igniterealtime.openfire.plugins.kanban.pubsub.BoardNodeProvisioner;
 import org.igniterealtime.openfire.plugins.kanban.service.KanbanException;
 import org.igniterealtime.openfire.plugins.kanban.service.KanbanService;
 import org.igniterealtime.openfire.plugins.kanban.service.KanbanService.CardPatch;
@@ -20,18 +27,27 @@ import org.igniterealtime.openfire.plugins.kanban.service.KanbanService.Result;
 import org.xmpp.packet.IQ;
 import org.xmpp.packet.JID;
 import org.xmpp.packet.PacketError;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
 /** Parses and serializes the version-zero Kanban IQ contract. */
 public final class KanbanProtocol {
+    private static final Logger Log = LoggerFactory.getLogger(KanbanProtocol.class);
     public static final String MODEL_NAMESPACE = "urn:xmpp:kanban:0";
     public static final String COMMAND_NAMESPACE = "urn:xmpp:kanban:commands:0";
 
     private final KanbanService service;
     private final String pubsubDomain;
+    private final BoardNodeProvisioner nodeProvisioner;
 
     public KanbanProtocol(KanbanService service, String pubsubDomain) {
-        this.service = service;
-        this.pubsubDomain = pubsubDomain;
+        this(service, pubsubDomain, BoardNodeProvisioner.NOOP);
+    }
+
+    public KanbanProtocol(KanbanService service, String pubsubDomain, BoardNodeProvisioner nodeProvisioner) {
+        this.service = Objects.requireNonNull(service);
+        this.pubsubDomain = Objects.requireNonNull(pubsubDomain);
+        this.nodeProvisioner = Objects.requireNonNull(nodeProvisioner);
     }
 
     public IQ handle(IQ request, String actor) {
@@ -49,6 +65,9 @@ public final class KanbanProtocol {
                 case "update-card" -> updateCard(request, actor, command);
                 case "move-card" -> moveCard(request, actor, command);
                 case "delete-card" -> deleteCard(request, actor, command);
+                case "create-label" -> createLabel(request, actor, command);
+                case "update-label" -> updateLabel(request, actor, command);
+                case "delete-label" -> deleteLabel(request, actor, command);
                 case "add-member" -> addMember(request, actor, command);
                 case "update-member-role" -> updateMember(request, actor, command);
                 case "remove-member" -> removeMember(request, actor, command);
@@ -74,6 +93,12 @@ public final class KanbanProtocol {
     private IQ getBoard(IQ request, String actor, Element command) {
         requireType(request, IQ.Type.get);
         final BoardSnapshot snapshot = service.snapshot(actor, required(command, "board-id"));
+        try {
+            nodeProvisioner.ensureReady(snapshot);
+        } catch (RuntimeException exception) {
+            Log.warn("Unable to prepare PubSub nodes for board {}", snapshot.board().id(), exception);
+            return error(request, PacketError.Condition.service_unavailable, "pubsub-unavailable", null);
+        }
         final IQ response = IQ.createResultIQ(request);
         final Element root = response.setChildElement("snapshot", MODEL_NAMESPACE);
         root.addAttribute("pubsub-service", pubsubDomain);
@@ -84,6 +109,8 @@ public final class KanbanProtocol {
         snapshot.columns().forEach(column -> addColumn(columns.addElement("column"), column));
         final Element cards = root.addElement("cards");
         snapshot.cards().forEach(card -> addCard(cards.addElement("card"), card));
+        final Element labels = root.addElement("labels");
+        snapshot.labels().forEach(label -> addLabel(labels.addElement("label"), label));
         final Element members = root.addElement("members");
         snapshot.members().forEach(member -> addMember(members.addElement("member"), member));
         return response;
@@ -105,13 +132,13 @@ public final class KanbanProtocol {
         requireType(request, IQ.Type.set);
         return result(request, service.createCard(actor, required(command, "board-id"), required(command, "column-id"),
             childText(command, "title"), childTextOptional(command, "description"), childBareJid(command, "assignee", "jid"),
-            revision(command)));
+            cardPriority(command), labelIds(command), revision(command)));
     }
 
     private IQ updateCard(IQ request, String actor, Element command) {
         requireType(request, IQ.Type.set);
         final CardPatch patch = new CardPatch(textPatch(command, "title"), textPatch(command, "description"),
-            bareJidPatch(command, "assignee", "jid"));
+            bareJidPatch(command, "assignee", "jid"), priorityPatch(command), labelIdsPatch(command));
         return result(request, service.updateCard(actor, required(command, "card-id"), revision(command), patch));
     }
 
@@ -124,6 +151,24 @@ public final class KanbanProtocol {
     private IQ deleteCard(IQ request, String actor, Element command) {
         requireType(request, IQ.Type.set);
         return result(request, service.deleteCard(actor, required(command, "card-id"), revision(command)));
+    }
+
+    private IQ createLabel(IQ request, String actor, Element command) {
+        requireType(request, IQ.Type.set);
+        return result(request, service.createLabel(actor, required(command, "board-id"), childText(command, "name"),
+            LabelColor.fromWire(childText(command, "color")), revision(command)));
+    }
+
+    private IQ updateLabel(IQ request, String actor, Element command) {
+        requireType(request, IQ.Type.set);
+        return result(request, service.updateLabel(actor, required(command, "board-id"), required(command, "label-id"),
+            textPatch(command, "name"), labelColorPatch(command), revision(command)));
+    }
+
+    private IQ deleteLabel(IQ request, String actor, Element command) {
+        requireType(request, IQ.Type.set);
+        return result(request, service.deleteLabel(actor, required(command, "board-id"),
+            required(command, "label-id"), revision(command)));
     }
 
     private IQ addMember(IQ request, String actor, Element command) {
@@ -242,6 +287,45 @@ public final class KanbanProtocol {
         return !patch.present() || patch.value() == null ? patch : FieldPatch.set(new JID(patch.value()).toBareJID());
     }
 
+    private static FieldPatch<CardPriority> priorityPatch(Element element) {
+        final Element child = singleChild(element, "priority");
+        return child == null ? FieldPatch.absent() : FieldPatch.set(CardPriority.fromWire(child.getText()));
+    }
+
+    private static CardPriority cardPriority(Element element) {
+        final Element child = singleChild(element, "priority");
+        return CardPriority.fromWire(child == null ? null : child.getText());
+    }
+
+    private static FieldPatch<LabelColor> labelColorPatch(Element element) {
+        final Element child = element.element("color");
+        return child == null ? FieldPatch.absent() : FieldPatch.set(LabelColor.fromWire(child.getText()));
+    }
+
+    private static List<String> labelIds(Element element) {
+        final Element labels = singleChild(element, "labels");
+        if (labels == null) {
+            return List.of();
+        }
+        final List<String> ids = new ArrayList<>();
+        for (Element label : labels.elements("label")) {
+            ids.add(required(label, "id"));
+        }
+        return List.copyOf(ids);
+    }
+
+    private static FieldPatch<List<String>> labelIdsPatch(Element element) {
+        return singleChild(element, "labels") == null ? FieldPatch.absent() : FieldPatch.set(labelIds(element));
+    }
+
+    private static Element singleChild(Element element, String name) {
+        final List<Element> children = element.elements(name);
+        if (children.size() > 1) {
+            throw new IllegalArgumentException("Duplicate element " + name);
+        }
+        return children.isEmpty() ? null : children.get(0);
+    }
+
     private static String requiredBareJid(Element element, String attribute) {
         return new JID(required(element, attribute)).toBareJID();
     }
@@ -268,6 +352,18 @@ public final class KanbanProtocol {
         if (card.assigneeJid() != null) {
             element.addElement("assignee").addAttribute("jid", card.assigneeJid());
         }
+        if (card.priority() != CardPriority.NONE) {
+            element.addElement("priority").setText(card.priority().wireName());
+        }
+        if (!card.labelIds().isEmpty()) {
+            final Element labels = element.addElement("labels");
+            card.labelIds().forEach(labelId -> labels.addElement("label").addAttribute("id", labelId));
+        }
+    }
+
+    private static void addLabel(Element element, Label label) {
+        element.addAttribute("id", label.id()).addAttribute("color", label.color().wireName());
+        element.addElement("name").setText(label.name());
     }
 
     private static void addMember(Element element, Member member) {

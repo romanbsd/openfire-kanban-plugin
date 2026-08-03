@@ -1,0 +1,33 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<jive>
+  <adminConsole>
+    <port>9090</port>
+    <securePort>9091</securePort>
+  </adminConsole>
+  <connectionProvider>
+    <className>org.jivesoftware.database.EmbeddedConnectionProvider</className>
+  </connectionProvider>
+  <autosetup>
+    <run>true</run>
+    <locale>en</locale>
+    <xmpp>
+      <auth><anonymous>true</anonymous></auth>
+      <domain>example.org</domain>
+      <fqdn>example.org</fqdn>
+    </xmpp>
+    <database><mode>embedded</mode></database>
+    <admin>
+      <email>admin@example.org</email>
+      <password>admin</password>
+    </admin>
+    <users>
+      <user1><username>john</username><password>secret</password><name>John Owner</name><email>john@example.org</email></user1>
+      <user2><username>jane</username><password>secret</password><name>Jane Editor</name><email>jane@example.org</email></user2>
+      <user3><username>bob</username><password>secret</password><name>Bob Viewer</name><email>bob@example.org</email></user3>
+      <user4><username>mallory</username><password>secret</password><name>Mallory Outsider</name><email>mallory@example.org</email></user4>
+    </users>
+  </autosetup>
+  <xmpp>
+    <socket><ssl><certificate><strict-validation>false</strict-validation></certificate></ssl></socket>
+  </xmpp>
+</jive>

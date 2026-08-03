@@ -5,7 +5,9 @@ import java.util.Locale;
 import org.igniterealtime.openfire.plugins.kanban.model.ActivityType;
 import org.igniterealtime.openfire.plugins.kanban.model.Board;
 import org.igniterealtime.openfire.plugins.kanban.model.Card;
+import org.igniterealtime.openfire.plugins.kanban.model.CardPriority;
 import org.igniterealtime.openfire.plugins.kanban.model.KanbanColumn;
+import org.igniterealtime.openfire.plugins.kanban.model.Label;
 import org.igniterealtime.openfire.plugins.kanban.model.Member;
 
 /** XML serialization for database activity payloads and PubSub projections. */
@@ -32,7 +34,20 @@ public final class KanbanXml {
         if (card.assigneeJid() != null) {
             xml.append("<assignee jid='").append(escape(card.assigneeJid())).append("'/>");
         }
+        if (card.priority() != CardPriority.NONE) {
+            xml.append("<priority>").append(card.priority().wireName()).append("</priority>");
+        }
+        if (!card.labelIds().isEmpty()) {
+            xml.append("<labels>");
+            card.labelIds().forEach(labelId -> xml.append("<label id='").append(escape(labelId)).append("'/>") );
+            xml.append("</labels>");
+        }
         return xml.append("</card>").toString();
+    }
+
+    public static String labelXml(Label label) {
+        return "<label xmlns='urn:xmpp:kanban:0' id='" + escape(label.id()) + "' color='"
+            + label.color().wireName() + "'><name>" + escape(label.name()) + "</name></label>";
     }
 
     public static String tombstoneXml(Card card) {

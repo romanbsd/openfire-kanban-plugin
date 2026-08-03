@@ -7,7 +7,7 @@
     <parent>
         <groupId>org.igniterealtime.openfire</groupId>
         <artifactId>plugins</artifactId>
-        <version>5.1.1</version>
+        <version>5.2.0-SNAPSHOT</version>
     </parent>
 
     <groupId>org.igniterealtime.openfire.plugins</groupId>
@@ -32,12 +32,29 @@
         <maven-compiler-plugin.version>3.15.0</maven-compiler-plugin.version>
         <mockito.version>5.23.0</mockito.version>
         <maven-surefire-plugin.version>3.5.4</maven-surefire-plugin.version>
+        <smack.version>4.5.0-rc1</smack.version>
     </properties>
 
     <build>
+        <!--
+            Openfire derives a plugin's canonical name from the archive filename.
+            Keep the core JAR separate so that the assembled, directly installable
+            archive can be named kanban.jar and resolve kanban_i18n.properties.
+        -->
+        <finalName>${project.artifactId}-core</finalName>
         <plugins>
             <plugin>
                 <artifactId>maven-assembly-plugin</artifactId>
+                <executions>
+                    <execution>
+                        <id>make-assembly</id>
+                        <configuration>
+                            <appendAssemblyId>false</appendAssemblyId>
+                            <attach>true</attach>
+                            <finalName>${plugin.name}</finalName>
+                        </configuration>
+                    </execution>
+                </executions>
             </plugin>
             <plugin>
                 <artifactId>maven-compiler-plugin</artifactId>
@@ -86,6 +103,10 @@
             <plugin>
                 <groupId>org.eclipse.jetty.ee8</groupId>
                 <artifactId>jetty-ee8-jspc-maven-plugin</artifactId>
+                <configuration>
+                    <webAppSourceDirectory>${project.basedir}/src/web</webAppSourceDirectory>
+                    <webXml>${project.basedir}/src/web/WEB-INF/web.xml</webXml>
+                </configuration>
             </plugin>
             <plugin>
                 <artifactId>maven-surefire-plugin</artifactId>
@@ -93,6 +114,18 @@
                 <configuration>
                     <argLine>@{argLine} -javaagent:${settings.localRepository}/org/mockito/mockito-core/${mockito.version}/mockito-core-${mockito.version}.jar</argLine>
                 </configuration>
+            </plugin>
+            <plugin>
+                <artifactId>maven-failsafe-plugin</artifactId>
+                <version>${maven-surefire-plugin.version}</version>
+                <executions>
+                    <execution>
+                        <goals>
+                            <goal>integration-test</goal>
+                            <goal>verify</goal>
+                        </goals>
+                    </execution>
+                </executions>
             </plugin>
             <plugin>
                 <groupId>org.jacoco</groupId>
@@ -130,6 +163,25 @@
     </build>
 
     <dependencies>
+        <!-- Used only by the opt-in Docker E2E test to exercise the public XMPP surface. -->
+        <dependency>
+            <groupId>org.igniterealtime.smack</groupId>
+            <artifactId>smack-java11</artifactId>
+            <version>${smack.version}</version>
+            <scope>test</scope>
+        </dependency>
+        <dependency>
+            <groupId>org.igniterealtime.smack</groupId>
+            <artifactId>smack-tcp</artifactId>
+            <version>${smack.version}</version>
+            <scope>test</scope>
+        </dependency>
+        <dependency>
+            <groupId>org.igniterealtime.smack</groupId>
+            <artifactId>smack-extensions</artifactId>
+            <version>${smack.version}</version>
+            <scope>test</scope>
+        </dependency>
         <dependency>
             <groupId>org.junit.jupiter</groupId>
             <artifactId>junit-jupiter</artifactId>

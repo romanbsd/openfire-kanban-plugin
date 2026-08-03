@@ -4,7 +4,6 @@ import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 
 import java.sql.SQLException;
-
 import org.igniterealtime.openfire.plugins.kanban.TestDatabase;
 import org.igniterealtime.openfire.plugins.kanban.model.Board;
 import org.junit.jupiter.api.Test;
@@ -30,4 +29,5 @@ class JdbcKanbanRepositoryTest {
             throw new SQLException("database failure");
         }));
     }
+
 }

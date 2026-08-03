@@ -1,6 +1,7 @@
 package org.igniterealtime.openfire.plugins.kanban;
 
 import org.dom4j.Element;
+import org.igniterealtime.openfire.plugins.kanban.pubsub.BoardNodeProvisioner;
 import org.igniterealtime.openfire.plugins.kanban.service.KanbanService;
 import org.igniterealtime.openfire.plugins.kanban.xml.KanbanProtocol;
 import org.jivesoftware.openfire.XMPPServer;
@@ -21,8 +22,12 @@ public final class KanbanComponent implements Component {
     private JID componentJid;
 
     public KanbanComponent(KanbanService service, String pubsubDomain) {
+        this(service, pubsubDomain, BoardNodeProvisioner.NOOP);
+    }
+
+    public KanbanComponent(KanbanService service, String pubsubDomain, BoardNodeProvisioner nodeProvisioner) {
         this.service = service;
-        protocol = new KanbanProtocol(service, pubsubDomain);
+        protocol = new KanbanProtocol(service, pubsubDomain, nodeProvisioner);
     }
 
     @Override
@@ -53,11 +58,11 @@ public final class KanbanComponent implements Component {
             return;
         }
         final IQ response;
-        if (!authenticatedLocalUser(iq.getFrom())) {
+        if (isNamespace(iq, "http://jabber.org/protocol/disco#info")) {
+            response = discoInfo(iq);
+        } else if (!authenticatedLocalUser(iq.getFrom())) {
             response = IQ.createResultIQ(iq);
             response.setError(PacketError.Condition.forbidden);
-        } else if (isNamespace(iq, "http://jabber.org/protocol/disco#info")) {
-            response = discoInfo(iq);
         } else if (isNamespace(iq, "http://jabber.org/protocol/disco#items")) {
             response = discoItems(iq);
         } else {

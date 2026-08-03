@@ -32,6 +32,7 @@ CREATE TABLE ofKanbanCard (
   title VARCHAR(255) NOT NULL,
   description LONGVARCHAR NULL,
   assigneeJID VARCHAR(1024) NULL,
+  priority VARCHAR(16) DEFAULT 'NONE' NOT NULL,
   deleted INT NOT NULL,
   createdBy VARCHAR(1024) NOT NULL,
   createdAt BIGINT NOT NULL,
@@ -41,6 +42,26 @@ CREATE TABLE ofKanbanCard (
   CONSTRAINT ofKanbanCard_board_fk FOREIGN KEY (boardID) REFERENCES ofKanbanBoard(boardID),
   CONSTRAINT ofKanbanCard_column_fk FOREIGN KEY (columnID) REFERENCES ofKanbanColumn(columnID),
   CONSTRAINT ofKanbanCard_rank_uq UNIQUE (columnID, rank)
+);
+
+CREATE TABLE ofKanbanLabel (
+  labelID VARCHAR(36) NOT NULL,
+  boardID VARCHAR(36) NOT NULL,
+  name VARCHAR(32) NOT NULL,
+  color VARCHAR(16) NOT NULL,
+  createdAt BIGINT NOT NULL,
+  CONSTRAINT ofKanbanLabel_pk PRIMARY KEY (labelID),
+  CONSTRAINT ofKanbanLabel_board_fk FOREIGN KEY (boardID) REFERENCES ofKanbanBoard(boardID)
+);
+
+CREATE TABLE ofKanbanCardLabel (
+  cardID VARCHAR(36) NOT NULL,
+  labelID VARCHAR(36) NOT NULL,
+  position INT NOT NULL,
+  CONSTRAINT ofKanbanCardLabel_pk PRIMARY KEY (cardID, labelID),
+  CONSTRAINT ofKanbanCardLabel_card_fk FOREIGN KEY (cardID) REFERENCES ofKanbanCard(cardID),
+  CONSTRAINT ofKanbanCardLabel_label_fk FOREIGN KEY (labelID) REFERENCES ofKanbanLabel(labelID),
+  CONSTRAINT ofKanbanCardLabel_position_uq UNIQUE (cardID, position)
 );
 
 CREATE TABLE ofKanbanMember (
@@ -90,4 +111,6 @@ CREATE TABLE ofKanbanOutbox (
 );
 
 CREATE INDEX ofKanbanCard_board_idx ON ofKanbanCard (boardID, deleted);
+CREATE INDEX ofKanbanLabel_board_idx ON ofKanbanLabel (boardID);
+CREATE INDEX ofKanbanCardLabel_label_idx ON ofKanbanCardLabel (labelID);
 CREATE INDEX ofKanbanOutbox_ready_idx ON ofKanbanOutbox (status, availableAt);

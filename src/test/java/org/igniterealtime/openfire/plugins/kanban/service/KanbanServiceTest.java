@@ -9,6 +9,7 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 import java.time.Clock;
 import java.time.Instant;
 import java.time.ZoneOffset;
+import java.util.List;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.ExecutorService;
@@ -17,6 +18,8 @@ import java.util.concurrent.Future;
 
 import org.igniterealtime.openfire.plugins.kanban.TestDatabase;
 import org.igniterealtime.openfire.plugins.kanban.model.Role;
+import org.igniterealtime.openfire.plugins.kanban.model.CardPriority;
+import org.igniterealtime.openfire.plugins.kanban.model.LabelColor;
 import org.igniterealtime.openfire.plugins.kanban.repository.JdbcKanbanRepository;
 import org.igniterealtime.openfire.plugins.kanban.service.KanbanException.Code;
 import org.igniterealtime.openfire.plugins.kanban.service.KanbanService.CardPatch;
@@ -68,6 +71,53 @@ class KanbanServiceTest {
         assertEquals(1, service.listBoards("owner@example.org").size());
         assertEquals(0, service.listBoards("editor@example.org").size());
         assertTrue(repository.diagnostics(1234).pending() > 0);
+    }
+
+    @Test
+    void persistsPriorityAndOrderedLabelsAndRepublishesCardsWhenDeletingLabels() {
+        final var board = service.createBoard("owner@example.org", "Board", 0);
+        final var column = service.createColumn("owner@example.org", board.value().id(), "Todo", 0, 1);
+        final var bug = service.createLabel("owner@example.org", board.value().id(), " Bug ", LabelColor.ROSE, 2);
+        final var docs = service.createLabel("owner@example.org", board.value().id(), "docs", LabelColor.MINT, 3);
+
+        final var card = service.createCard("owner@example.org", board.value().id(), column.value().id(),
+            "Card", null, null, CardPriority.URGENT, List.of(docs.value().id(), bug.value().id()), 4);
+        assertEquals(CardPriority.URGENT, card.value().priority());
+        assertEquals(List.of(docs.value().id(), bug.value().id()), card.value().labelIds());
+        assertEquals(List.of("Bug", "docs"), service.snapshot("owner@example.org", board.value().id()).labels().stream()
+            .map(label -> label.name()).toList());
+
+        service.deleteLabel("owner@example.org", board.value().id(), bug.value().id(), 5);
+        final var afterDelete = service.snapshot("owner@example.org", board.value().id());
+        assertEquals(List.of(docs.value().id()), afterDelete.cards().get(0).labelIds());
+        assertEquals(2, afterDelete.cards().get(0).revision());
+        assertEquals(List.of("docs"), afterDelete.labels().stream().map(label -> label.name()).toList());
+
+        final var cleared = service.updateCard("owner@example.org", card.value().id(), 2,
+            new CardPatch(FieldPatch.absent(), FieldPatch.absent(), FieldPatch.absent(),
+                FieldPatch.set(CardPriority.NONE), FieldPatch.set(List.of())));
+        assertEquals(CardPriority.NONE, cleared.value().priority());
+        assertTrue(cleared.value().labelIds().isEmpty());
+        assertTrue(repository.diagnostics(1234).pending() > 0);
+    }
+
+    @Test
+    void rejectsInvalidLabelCatalogAndCardReferences() {
+        final var board = service.createBoard("owner@example.org", "Board", 0);
+        final var column = service.createColumn("owner@example.org", board.value().id(), "Todo", 0, 1);
+        final var label = service.createLabel("owner@example.org", board.value().id(), "Bug", LabelColor.ROSE, 2);
+        final var updated = service.updateLabel("owner@example.org", board.value().id(), label.value().id(),
+            FieldPatch.set("Defect"), FieldPatch.set(LabelColor.ORANGE), 3);
+        assertEquals("Defect", updated.value().name());
+        assertEquals(LabelColor.ORANGE, updated.value().color());
+
+        assertCode(Code.BAD_REQUEST,
+            () -> service.createLabel("owner@example.org", board.value().id(), " defect ", LabelColor.MINT, 4));
+        assertCode(Code.BAD_REQUEST, () -> service.createCard("owner@example.org", board.value().id(),
+            column.value().id(), "Card", null, null, CardPriority.HIGH, List.of("unknown"), 4));
+        assertCode(Code.BAD_REQUEST, () -> service.createCard("owner@example.org", board.value().id(),
+            column.value().id(), "Card", null, null, CardPriority.HIGH,
+            List.of("1", "2", "3", "4", "5", "6", "7", "8", "9"), 4));
     }
 
     @Test

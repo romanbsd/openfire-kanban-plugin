@@ -8,6 +8,9 @@ public enum ActivityType {
     CARD_UPDATED("CardUpdated"),
     CARD_MOVED("CardMoved"),
     CARD_DELETED("CardDeleted"),
+    LABEL_CREATED("LabelCreated"),
+    LABEL_UPDATED("LabelUpdated"),
+    LABEL_DELETED("LabelDeleted"),
     MEMBER_ADDED("MemberAdded"),
     MEMBER_ROLE_CHANGED("MemberRoleChanged"),
     MEMBER_REMOVED("MemberRemoved");

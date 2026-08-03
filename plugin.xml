@@ -6,7 +6,7 @@
     <author>Openfire Community</author>
     <version>${project.version}</version>
     <date>2026-08-02</date>
-    <minServerVersion>5.1.1</minServerVersion>
+    <minServerVersion>5.2.0</minServerVersion>
     <databaseKey>kanban</databaseKey>
     <databaseVersion>1</databaseVersion>
     <licenseType>apache</licenseType>
