@@ -15,8 +15,12 @@ public final class KanbanXml {
     private KanbanXml() {}
 
     public static String boardXml(Board board) {
-        return "<board xmlns='urn:xmpp:kanban:0' id='" + board.id() + "' revision='" + board.revision()
-            + "'><name>" + escape(board.name()) + "</name></board>";
+        final StringBuilder xml = new StringBuilder("<board xmlns='urn:xmpp:kanban:0' id='").append(board.id())
+            .append("' revision='").append(board.revision()).append("'");
+        if (board.discussionRoomJid() != null && !board.discussionRoomJid().isBlank()) {
+            xml.append(" discussion-room='").append(escape(board.discussionRoomJid())).append("'");
+        }
+        return xml.append("><name>").append(escape(board.name())).append("</name></board>").toString();
     }
 
     public static String columnXml(KanbanColumn column) {
@@ -41,6 +45,9 @@ public final class KanbanXml {
             xml.append("<labels>");
             card.labelIds().forEach(labelId -> xml.append("<label id='").append(escape(labelId)).append("'/>") );
             xml.append("</labels>");
+        }
+        if (card.discussionThreadId() != null && !card.discussionThreadId().isBlank()) {
+            xml.append("<discussion-thread>").append(escape(card.discussionThreadId())).append("</discussion-thread>");
         }
         return xml.append("</card>").toString();
     }

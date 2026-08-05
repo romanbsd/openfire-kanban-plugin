@@ -99,9 +99,9 @@ public final class JdbcKanbanRepository {
     }
 
     public static final class Transaction {
-        private static final String BOARD_COLUMNS = "boardID,name,revision,createdBy,createdAt,updatedAt";
+        private static final String BOARD_COLUMNS = "boardID,name,revision,createdBy,createdAt,updatedAt,discussionRoomJID";
         private static final String CARD_COLUMNS =
-            "cardID,boardID,columnID,revision,rank,title,description,assigneeJID,priority,deleted,createdBy,createdAt,updatedAt,deletedAt";
+            "cardID,boardID,columnID,revision,rank,title,description,assigneeJID,priority,discussionThreadID,deleted,createdBy,createdAt,updatedAt,deletedAt";
         private static final String COLUMN_COLUMNS = "columnID,boardID,name,rank,wipLimit,createdAt";
         private static final String LABEL_COLUMNS = "labelID,boardID,name,color,createdAt";
         private static final String MEMBER_COLUMNS = "memberID,boardID,bareJID,role,createdAt";
@@ -144,7 +144,7 @@ public final class JdbcKanbanRepository {
         }
 
         public List<Board> listBoards(String bareJid) throws SQLException {
-            return queryList("SELECT b.boardID,b.name,b.revision,b.createdBy,b.createdAt,b.updatedAt "
+            return queryList("SELECT b.boardID,b.name,b.revision,b.createdBy,b.createdAt,b.updatedAt,b.discussionRoomJID "
                 + "FROM ofKanbanBoard b JOIN ofKanbanMember m ON b.boardID=m.boardID "
                 + "WHERE m.bareJID=? ORDER BY b.name,b.boardID", Transaction::readBoard, bareJid);
         }
@@ -184,8 +184,9 @@ public final class JdbcKanbanRepository {
         }
 
         public void insertBoard(Board board) throws SQLException {
-            execute("INSERT INTO ofKanbanBoard(boardID,name,revision,createdBy,createdAt,updatedAt) VALUES(?,?,?,?,?,?)",
-                board.id(), board.name(), board.revision(), board.createdBy(), board.createdAt(), board.updatedAt());
+            execute("INSERT INTO ofKanbanBoard(boardID,name,revision,createdBy,createdAt,updatedAt,discussionRoomJID) VALUES(?,?,?,?,?,?,?)",
+                board.id(), board.name(), board.revision(), board.createdBy(), board.createdAt(), board.updatedAt(),
+                board.discussionRoomJid());
         }
 
         public void insertColumn(KanbanColumn column) throws SQLException {
@@ -194,10 +195,10 @@ public final class JdbcKanbanRepository {
         }
 
         public void insertCard(Card card) throws SQLException {
-            execute("INSERT INTO ofKanbanCard(cardID,boardID,columnID,revision,rank,title,description,assigneeJID,priority,deleted,createdBy,createdAt,updatedAt,deletedAt) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+            execute("INSERT INTO ofKanbanCard(cardID,boardID,columnID,revision,rank,title,description,assigneeJID,priority,discussionThreadID,deleted,createdBy,createdAt,updatedAt,deletedAt) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
                 card.id(), card.boardId(), card.columnId(), card.revision(), card.rank(), card.title(), card.description(),
-                card.assigneeJid(), card.priority().name(), card.deleted() ? 1 : 0, card.createdBy(), card.createdAt(),
-                card.updatedAt(), card.deletedAt());
+                card.assigneeJid(), card.priority().name(), card.discussionThreadId(), card.deleted() ? 1 : 0,
+                card.createdBy(), card.createdAt(), card.updatedAt(), card.deletedAt());
             replaceCardLabels(card.id(), card.labelIds());
         }
 
@@ -216,13 +217,21 @@ public final class JdbcKanbanRepository {
         }
 
         public boolean updateCard(Card card, long expectedRevision) throws SQLException {
-            final boolean updated = execute("UPDATE ofKanbanCard SET columnID=?,revision=revision+1,rank=?,title=?,description=?,assigneeJID=?,priority=?,deleted=?,updatedAt=?,deletedAt=? WHERE cardID=? AND revision=? AND deleted=0",
+            final boolean updated = execute("UPDATE ofKanbanCard SET columnID=?,revision=revision+1,rank=?,title=?,description=?,assigneeJID=?,priority=?,discussionThreadID=?,deleted=?,updatedAt=?,deletedAt=? WHERE cardID=? AND revision=? AND deleted=0",
                 card.columnId(), card.rank(), card.title(), card.description(), card.assigneeJid(), card.priority().name(),
-                card.deleted() ? 1 : 0, card.updatedAt(), card.deletedAt(), card.id(), expectedRevision) == 1;
+                card.discussionThreadId(), card.deleted() ? 1 : 0, card.updatedAt(), card.deletedAt(), card.id(),
+                expectedRevision) == 1;
             if (updated) {
                 replaceCardLabels(card.id(), card.labelIds());
             }
             return updated;
+        }
+
+        public boolean updateBoardDiscussionRoom(String boardId, String roomJid, long expectedRevision, long now)
+            throws SQLException {
+            return execute(
+                "UPDATE ofKanbanBoard SET discussionRoomJID=?,revision=revision+1,updatedAt=? WHERE boardID=? AND revision=?",
+                roomJid, now, boardId, expectedRevision) == 1;
         }
 
         public void updateLabel(Label label) throws SQLException {
@@ -379,8 +388,8 @@ public final class JdbcKanbanRepository {
             final List<String> labelIds = queryList(
                 "SELECT labelID FROM ofKanbanCardLabel WHERE cardID=? ORDER BY position", result -> result.getString(1), card.id());
             return new Card(card.id(), card.boardId(), card.columnId(), card.revision(), card.rank(), card.title(),
-                card.description(), card.assigneeJid(), card.priority(), labelIds, card.deleted(), card.createdBy(),
-                card.createdAt(), card.updatedAt(), card.deletedAt());
+                card.description(), card.assigneeJid(), card.priority(), labelIds, card.discussionThreadId(),
+                card.deleted(), card.createdBy(), card.createdAt(), card.updatedAt(), card.deletedAt());
         }
 
         private List<Card> withLabels(List<Card> cards) throws SQLException {
@@ -396,7 +405,8 @@ public final class JdbcKanbanRepository {
         }
 
         private static Board readBoard(ResultSet result) throws SQLException {
-            return new Board(result.getString(1), result.getString(2), result.getLong(3), result.getString(4), result.getLong(5), result.getLong(6));
+            return new Board(result.getString(1), result.getString(2), result.getLong(3), result.getString(4),
+                result.getLong(5), result.getLong(6), result.getString(7));
         }
 
         private static KanbanColumn readColumn(ResultSet result) throws SQLException {
@@ -404,12 +414,12 @@ public final class JdbcKanbanRepository {
         }
 
         private static Card readCard(ResultSet result) throws SQLException {
-            final long deletedAt = result.getLong(14);
+            final long deletedAt = result.getLong(15);
             final boolean deletedAtWasNull = result.wasNull();
             return new Card(result.getString(1), result.getString(2), result.getString(3), result.getLong(4), result.getString(5),
                 result.getString(6), result.getString(7), result.getString(8), CardPriority.valueOf(result.getString(9)),
-                List.of(), result.getInt(10) != 0, result.getString(11), result.getLong(12), result.getLong(13),
-                deletedAtWasNull ? null : deletedAt);
+                List.of(), result.getString(10), result.getInt(11) != 0, result.getString(12), result.getLong(13),
+                result.getLong(14), deletedAtWasNull ? null : deletedAt);
         }
 
         private static Label readLabel(ResultSet result) throws SQLException {

@@ -216,6 +216,35 @@ class KanbanProtocolTest {
     }
 
     @Test
+    void ensureCardDiscussionReturnsRoomAndThreadAttributes() {
+        final String boardId = createBoard();
+        final IQ column = request(IQ.Type.set, "create-column");
+        column.getChildElement().addAttribute("board-id", boardId).addAttribute("expected-revision", "1");
+        column.getChildElement().addElement("name").setText("Todo");
+        final String columnId = result(column).attributeValue("id");
+
+        final IQ card = request(IQ.Type.set, "create-card");
+        card.getChildElement().addAttribute("board-id", boardId).addAttribute("column-id", columnId)
+            .addAttribute("expected-revision", "2");
+        card.getChildElement().addElement("title").setText("Discuss me");
+        final String cardId = result(card).attributeValue("id");
+
+        final IQ ensure = request(IQ.Type.set, "ensure-card-discussion");
+        ensure.getChildElement().addAttribute("board-id", boardId).addAttribute("card-id", cardId);
+        final org.dom4j.Element result = result(ensure);
+        assertEquals(cardId, result.attributeValue("card-id"));
+        assertNotNull(result.attributeValue("discussion-room"));
+        assertEquals("kanban-card-" + cardId, result.attributeValue("discussion-thread"));
+        assertNotNull(result.attributeValue("revision"));
+        assertNotNull(result.attributeValue("board-revision"));
+
+        final org.dom4j.Element snap = snapshot(boardId);
+        assertEquals(result.attributeValue("discussion-room"), snap.element("board").attributeValue("discussion-room"));
+        assertEquals(result.attributeValue("discussion-thread"),
+            snap.element("cards").element("card").elementText("discussion-thread"));
+    }
+
+    @Test
     void rejectsWrongIqTypesAndForeignNamespaces() {
         assertEquals(PacketError.Condition.bad_request,
             protocol.handle(request(IQ.Type.get, "create-board"), "owner@example.org").getError().getCondition());

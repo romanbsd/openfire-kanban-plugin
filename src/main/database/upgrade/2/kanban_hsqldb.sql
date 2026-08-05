@@ -1,0 +1,2 @@
+ALTER TABLE ofKanbanBoard ADD COLUMN discussionRoomJID VARCHAR(1024) NULL;
+ALTER TABLE ofKanbanCard ADD COLUMN discussionThreadID VARCHAR(255) NULL;

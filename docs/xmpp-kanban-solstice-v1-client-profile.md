@@ -10,9 +10,11 @@ This profile records the wire contract implemented by the Openfire Kanban
 plugin. Where the broader ProtoXEP is ambiguous, this document is authoritative
 for the Solstice v1 client.
 
-Solstice v1 does not expose comments, attachments, board update/deletion,
-column update/reordering/deletion, history pagination, automation, swimlanes,
-checklists, dependencies, or federation.
+Solstice v1 does not expose first-class comments entities, attachments, board
+update/deletion, column update/reordering/deletion, history pagination,
+automation, swimlanes, checklists, dependencies, or federation. Card discussion
+uses a board MUC + XEP-0461 thread link (see §5.5); chat content is not
+kanban-authoritative.
 
 ## 1. Service discovery and addressing
 
@@ -267,6 +269,7 @@ All mutations use IQ `set`. The implemented v1 commands are:
 | `create-label` | `board-id`, `expected-revision` | `<name>`, `<color>` | board |
 | `update-label` | `board-id`, `label-id`, `expected-revision` | present `<name>` and/or `<color>` | board |
 | `delete-label` | `board-id`, `label-id`, `expected-revision` | none | board |
+| `ensure-card-discussion` | `board-id`, `card-id` | none | card (+ board when room first assigned) |
 | `add-member` | `board-id`, `jid`, `role`, `expected-revision` | none | board |
 | `update-member-role` | `board-id`, `jid`, `role`, `expected-revision` | none | board |
 | `remove-member` | `board-id`, `jid`, `expected-revision` | none | board |
@@ -353,7 +356,63 @@ Deleting a label removes it from the catalog and from every card on the board.
 Affected cards receive a new card revision and are republished on the cards
 node.
 
-### 5.5 Move a card
+### 5.5 Card discussions (board MUC + XEP-0461 thread)
+
+Kanban owns **linkage** only. Conversation content uses a single persistent MUC
+per board and one XEP-0461 thread per card.
+
+**Board attribute** (on `<board>` when provisioned):
+
+```xml
+<board id="…" revision="…" discussion-room="board-<id>@conference.example.org">
+  <name>Engineering</name>
+</board>
+```
+
+**Card child** (when linked):
+
+```xml
+<discussion-thread>kanban-card-&lt;card-id&gt;</discussion-thread>
+```
+
+The thread id is the root message id used as the XEP-0461 thread identifier.
+
+**Command** (editor/owner; idempotent):
+
+```xml
+<ensure-card-discussion xmlns="urn:xmpp:kanban:commands:0"
+                        board-id="board-id" card-id="card-id"/>
+```
+
+Result:
+
+```xml
+<result xmlns="urn:xmpp:kanban:commands:0"
+        card-id="card-id" id="card-id"
+        discussion-room="board-…@conference.example.org"
+        discussion-thread="kanban-card-…"
+        revision="2" board-revision="3"/>
+```
+
+Behavior: ensure the board room exists (create + persist `discussion-room` on
+first call, bumping board revision); if the card already has a thread id, return
+it; otherwise post a stable root message in the room, store its id on the card
+(bump card revision), and publish the card PubSub item.
+
+**MUC affiliation mapping** (applied when the room is ensured and when members
+change):
+
+| Board role | MUC affiliation |
+|------------|-----------------|
+| owner | owner |
+| editor | member |
+| viewer | member (members-only room requires membership to join/read history; dedicated no-voice moderation is out of this cut) |
+
+Discussion messages are **not** authoritative for card fields (title, priority,
+labels, etc.). Clients MUST NOT treat MUC bodies as the source of truth for
+kanban state.
+
+### 5.6 Move a card
 
 ```xml
 <iq type="set" to="kanban.example.org" id="card-move">
@@ -365,7 +424,7 @@ node.
 </iq>
 ```
 
-### 5.6 Mutation result
+### 5.7 Mutation result
 
 Mutation replies are deliberately compact and do not contain a canonical entity
 snapshot:

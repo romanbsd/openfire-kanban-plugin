@@ -14,6 +14,7 @@ public record Card(
     String assigneeJid,
     CardPriority priority,
     List<String> labelIds,
+    String discussionThreadId,
     boolean deleted,
     String createdBy,
     long createdAt,
@@ -31,7 +32,16 @@ public record Card(
         long createdAt, long updatedAt, Long deletedAt
     ) {
         this(id, boardId, columnId, revision, rank, title, description, assigneeJid,
-            CardPriority.NONE, List.of(), deleted, createdBy, createdAt, updatedAt, deletedAt);
+            CardPriority.NONE, List.of(), null, deleted, createdBy, createdAt, updatedAt, deletedAt);
+    }
+
+    public Card(
+        String id, String boardId, String columnId, long revision, String rank, String title,
+        String description, String assigneeJid, CardPriority priority, List<String> labelIds,
+        boolean deleted, String createdBy, long createdAt, long updatedAt, Long deletedAt
+    ) {
+        this(id, boardId, columnId, revision, rank, title, description, assigneeJid, priority, labelIds,
+            null, deleted, createdBy, createdAt, updatedAt, deletedAt);
     }
 
     public Card update(
@@ -39,16 +49,22 @@ public record Card(
         CardPriority updatedPriority, List<String> updatedLabelIds, long now
     ) {
         return new Card(id, boardId, columnId, revision + 1, rank, updatedTitle, updatedDescription,
-            updatedAssigneeJid, updatedPriority, updatedLabelIds, false, createdBy, createdAt, now, null);
+            updatedAssigneeJid, updatedPriority, updatedLabelIds, discussionThreadId, false, createdBy, createdAt,
+            now, null);
     }
 
     public Card moveTo(String targetColumnId, String targetRank, long now) {
         return new Card(id, boardId, targetColumnId, revision + 1, targetRank, title, description,
-            assigneeJid, priority, labelIds, false, createdBy, createdAt, now, null);
+            assigneeJid, priority, labelIds, discussionThreadId, false, createdBy, createdAt, now, null);
+    }
+
+    public Card withDiscussionThread(String threadId, long now) {
+        return new Card(id, boardId, columnId, revision + 1, rank, title, description, assigneeJid, priority,
+            labelIds, threadId, false, createdBy, createdAt, now, null);
     }
 
     public Card tombstone(long now) {
         return new Card(id, boardId, columnId, revision + 1, rank, title, description, assigneeJid,
-            priority, labelIds, true, createdBy, createdAt, now, now);
+            priority, labelIds, discussionThreadId, true, createdBy, createdAt, now, now);
     }
 }

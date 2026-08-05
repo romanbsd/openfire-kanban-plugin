@@ -5,8 +5,10 @@ component `kanban.<domain>`.
 
 ## Milestone 0 features
 
-- board, column, card, and member persistence on PostgreSQL and HSQLDB
+- board, column, card, label, and member persistence on PostgreSQL and HSQLDB
 - IQ create/read/update/move/delete operations in `urn:xmpp:kanban:commands:0`
+- card priority + board label catalog (Solstice v1 profile)
+- board MUC + per-card XEP-0461 discussion linkage via `ensure-card-discussion`
 - optimistic board/card revisions and role-based authorization
 - WIP limits and server-owned LexoRank ordering
 - immutable activity records and ordered transactional PubSub outbox delivery

@@ -3,6 +3,7 @@ package org.igniterealtime.openfire.plugins.kanban.model;
 /** Stable event type names persisted in activity history and published over PubSub. */
 public enum ActivityType {
     BOARD_CREATED("BoardCreated"),
+    BOARD_UPDATED("BoardUpdated"),
     COLUMN_CREATED("ColumnCreated"),
     CARD_CREATED("CardCreated"),
     CARD_UPDATED("CardUpdated"),

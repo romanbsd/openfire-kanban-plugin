@@ -220,11 +220,19 @@ HTTP Upload (XEP-0363).
 
 Metadata via XEP-0446/0447.
 
-## 16. MUC Integration
+## 16. MUC Integration / card discussions
 
-Optional.
+Kanban owns discussion **linkage** only:
 
-Discussion SHALL NOT be authoritative.
+- one persistent MUC room per board (`discussion-room` on the board);
+- one XEP-0461 thread per card (`discussion-thread` / root message id);
+- idempotent `ensure-card-discussion` IQ creates the room/root when missing.
+
+Conversation content uses standard MUC + messaging XEPs (MAM, markers,
+reactions as supported by the client). Discussion SHALL NOT be authoritative
+for card or board fields.
+
+See `docs/xmpp-kanban-solstice-v1-client-profile.md` §5.5.
 
 ## 17. Database Projection
 

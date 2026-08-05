@@ -181,6 +181,46 @@ class KanbanServiceTest {
     }
 
     @Test
+    void ensureCardDiscussionIsIdempotentAndLinksRoomAndThread() {
+        final var provisioner = new org.igniterealtime.openfire.plugins.kanban.muc.InMemoryBoardDiscussionProvisioner("example.org");
+        final AtomicInteger ids = new AtomicInteger();
+        service = new KanbanService(repository, Clock.fixed(Instant.ofEpochMilli(1234), ZoneOffset.UTC),
+            () -> String.format("00000000-0000-0000-0000-%012d", ids.incrementAndGet()), () -> 0, actor -> true,
+            provisioner);
+
+        final var board = service.createBoard("owner@example.org", "Board", 0);
+        final var column = service.createColumn("owner@example.org", board.value().id(), "Todo", 0, 1);
+        final var card = service.createCard("owner@example.org", board.value().id(), column.value().id(),
+            "Card", null, null, 2);
+
+        final var first = service.ensureCardDiscussion("owner@example.org", board.value().id(), card.value().id());
+        assertEquals("board-" + board.value().id() + "@conference.example.org", first.value().discussionRoomJid());
+        assertEquals("kanban-card-" + card.value().id(), first.value().discussionThreadId());
+        assertEquals(1, provisioner.postedRoots().size());
+
+        final var second = service.ensureCardDiscussion("owner@example.org", board.value().id(), card.value().id());
+        assertEquals(first.value().discussionRoomJid(), second.value().discussionRoomJid());
+        assertEquals(first.value().discussionThreadId(), second.value().discussionThreadId());
+        assertEquals(1, provisioner.postedRoots().size());
+
+        final var snapshot = service.snapshot("owner@example.org", board.value().id());
+        assertEquals(first.value().discussionRoomJid(), snapshot.board().discussionRoomJid());
+        assertEquals(first.value().discussionThreadId(), snapshot.cards().get(0).discussionThreadId());
+        assertEquals(2, provisioner.syncedRooms().size()); // ensureRoom + re-sync on second ensure
+    }
+
+    @Test
+    void rejectsViewerEnsureCardDiscussion() {
+        final var board = service.createBoard("owner@example.org", "Board", 0);
+        final var column = service.createColumn("owner@example.org", board.value().id(), "Todo", 0, 1);
+        final var card = service.createCard("owner@example.org", board.value().id(), column.value().id(),
+            "Card", null, null, 2);
+        service.addMember("owner@example.org", board.value().id(), "viewer@example.org", Role.VIEWER, 3);
+        assertCode(Code.FORBIDDEN,
+            () -> service.ensureCardDiscussion("viewer@example.org", board.value().id(), card.value().id()));
+    }
+
+    @Test
     void serializesConcurrentMovesWhenEnforcingWip() throws Exception {
         final var board = service.createBoard("owner@example.org", "Board", 0);
         final var target = service.createColumn("owner@example.org", board.value().id(), "Target", 1, 1);

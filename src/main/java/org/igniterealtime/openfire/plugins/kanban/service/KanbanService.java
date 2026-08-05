@@ -24,12 +24,15 @@ import org.igniterealtime.openfire.plugins.kanban.model.ActivityType;
 import org.igniterealtime.openfire.plugins.kanban.model.BoardNodes;
 import org.igniterealtime.openfire.plugins.kanban.model.BoardSnapshot;
 import org.igniterealtime.openfire.plugins.kanban.model.Card;
+import org.igniterealtime.openfire.plugins.kanban.model.CardDiscussionLink;
 import org.igniterealtime.openfire.plugins.kanban.model.CardPriority;
 import org.igniterealtime.openfire.plugins.kanban.model.KanbanColumn;
 import org.igniterealtime.openfire.plugins.kanban.model.Label;
 import org.igniterealtime.openfire.plugins.kanban.model.LabelColor;
 import org.igniterealtime.openfire.plugins.kanban.model.Member;
 import org.igniterealtime.openfire.plugins.kanban.model.Role;
+import org.igniterealtime.openfire.plugins.kanban.muc.BoardDiscussionProvisioner;
+import org.igniterealtime.openfire.plugins.kanban.muc.InMemoryBoardDiscussionProvisioner;
 import org.igniterealtime.openfire.plugins.kanban.outbox.OutboxKind;
 import org.igniterealtime.openfire.plugins.kanban.rank.LexoRank;
 import org.igniterealtime.openfire.plugins.kanban.repository.JdbcKanbanRepository;
@@ -73,16 +76,27 @@ public final class KanbanService {
     private final Supplier<String> idGenerator;
     private final IntSupplier defaultWipLimit;
     private final Predicate<String> boardCreationAllowed;
+    private final BoardDiscussionProvisioner discussionProvisioner;
 
     public KanbanService(
         JdbcKanbanRepository repository, Clock clock, Supplier<String> idGenerator,
-        IntSupplier defaultWipLimit, Predicate<String> boardCreationAllowed
+        IntSupplier defaultWipLimit, Predicate<String> boardCreationAllowed,
+        BoardDiscussionProvisioner discussionProvisioner
     ) {
         this.repository = repository;
         this.clock = clock;
         this.idGenerator = idGenerator;
         this.defaultWipLimit = Objects.requireNonNull(defaultWipLimit);
         this.boardCreationAllowed = boardCreationAllowed;
+        this.discussionProvisioner = Objects.requireNonNull(discussionProvisioner);
+    }
+
+    public KanbanService(
+        JdbcKanbanRepository repository, Clock clock, Supplier<String> idGenerator,
+        IntSupplier defaultWipLimit, Predicate<String> boardCreationAllowed
+    ) {
+        this(repository, clock, idGenerator, defaultWipLimit, boardCreationAllowed,
+            new InMemoryBoardDiscussionProvisioner("example.org"));
     }
 
     public KanbanService(JdbcKanbanRepository repository, int defaultWipLimit) {
@@ -284,7 +298,7 @@ public final class KanbanService {
     }
 
     public Result<Member> addMember(String actor, String boardId, String bareJid, Role role, long expectedRevision) {
-        return repository.transact(transaction -> {
+        final Result<Member> result = repository.transact(transaction -> {
             final Board board = requireBoardMutation(transaction, boardId, actor, Permission.MEMBERS, expectedRevision);
             if (transaction.member(boardId, bareJid).isPresent()) {
                 throw error(KanbanException.Code.DUPLICATE_MEMBER, "The JID is already a board member");
@@ -298,12 +312,14 @@ public final class KanbanService {
             appendAccess(transaction, boardId, sequence, bareJid, OutboxKind.ACCESS_GRANT, now);
             return new Result<>(member, expectedRevision + 1);
         });
+        syncAffiliationsBestEffort(boardId);
+        return result;
     }
 
     public Result<Member> updateMemberRole(
         String actor, String boardId, String bareJid, Role role, long expectedRevision
     ) {
-        return repository.transact(transaction -> {
+        final Result<Member> result = repository.transact(transaction -> {
             final Board board = requireBoardMutation(transaction, boardId, actor, Permission.MEMBERS, expectedRevision);
             final Member member = transaction.member(boardId, bareJid)
                 .orElseThrow(() -> error(KanbanException.Code.ITEM_NOT_FOUND, "Member not found"));
@@ -316,10 +332,12 @@ public final class KanbanService {
                 actor, member.id(), memberXml(updated), now, false);
             return new Result<>(updated, expectedRevision + 1);
         });
+        syncAffiliationsBestEffort(boardId);
+        return result;
     }
 
     public Result<Member> removeMember(String actor, String boardId, String bareJid, long expectedRevision) {
-        return repository.transact(transaction -> {
+        final Result<Member> result = repository.transact(transaction -> {
             final Board board = requireBoardMutation(transaction, boardId, actor, Permission.MEMBERS, expectedRevision);
             final Member member = transaction.member(boardId, bareJid)
                 .orElseThrow(() -> error(KanbanException.Code.ITEM_NOT_FOUND, "Member not found"));
@@ -332,6 +350,65 @@ public final class KanbanService {
             appendAccess(transaction, boardId, sequence, bareJid, OutboxKind.ACCESS_REVOKE, now);
             return new Result<>(member, expectedRevision + 1);
         });
+        syncAffiliationsBestEffort(boardId);
+        return result;
+    }
+
+    /**
+     * Ensures the board discussion MUC and this card's XEP-0461 thread root exist.
+     * Idempotent: returns existing room/thread when already assigned.
+     */
+    public Result<CardDiscussionLink> ensureCardDiscussion(String actor, String boardId, String cardId) {
+        return repository.transact(transaction -> {
+            Board board = requireBoard(transaction, boardId);
+            requirePermission(transaction, boardId, actor, Permission.EDIT);
+            final Card card = requireActiveCard(transaction, cardId);
+            if (!card.boardId().equals(boardId)) {
+                throw error(KanbanException.Code.ITEM_NOT_FOUND, "Card not found");
+            }
+            long boardRevision = board.revision();
+            final long now = clock.millis();
+            final List<Member> members = transaction.members(boardId);
+            if (board.discussionRoomJid() == null || board.discussionRoomJid().isBlank()) {
+                final String roomJid = discussionProvisioner.ensureRoom(boardId, board.name(), members);
+                if (!transaction.updateBoardDiscussionRoom(boardId, roomJid, board.revision(), now)) {
+                    throw error(KanbanException.Code.REVISION_CONFLICT, "Board revision conflict", board.revision());
+                }
+                board = board.withDiscussionRoom(roomJid).withRevision(board.revision() + 1, now);
+                boardRevision = board.revision();
+                appendEvent(transaction, boardId, ActivityType.BOARD_UPDATED, actor, boardId, boardXml(board), now, false);
+            } else {
+                // Re-apply affiliations when ensuring an already-provisioned room (member drift).
+                discussionProvisioner.syncAffiliations(board.discussionRoomJid(), members);
+            }
+            final String roomJid = board.discussionRoomJid();
+            if (card.discussionThreadId() != null && !card.discussionThreadId().isBlank()) {
+                return new Result<>(
+                    new CardDiscussionLink(card.id(), roomJid, card.discussionThreadId(), card.revision(), boardRevision),
+                    boardRevision);
+            }
+            final String threadId = discussionProvisioner.postCardRootMessage(roomJid, card.id(), card.title());
+            final Card updated = card.withDiscussionThread(threadId, now);
+            updateCard(transaction, updated, card.revision());
+            appendEvent(transaction, boardId, ActivityType.CARD_UPDATED, actor, card.id(), cardXml(updated), now, true);
+            return new Result<>(
+                new CardDiscussionLink(updated.id(), roomJid, threadId, updated.revision(), boardRevision),
+                boardRevision);
+        });
+    }
+
+    private void syncAffiliationsBestEffort(String boardId) {
+        try {
+            repository.transact(transaction -> {
+                final Board board = transaction.board(boardId).orElse(null);
+                if (board != null && board.discussionRoomJid() != null && !board.discussionRoomJid().isBlank()) {
+                    discussionProvisioner.syncAffiliations(board.discussionRoomJid(), transaction.members(boardId));
+                }
+                return null;
+            });
+        } catch (RuntimeException ignored) {
+            // Affiliation sync is best-effort.
+        }
     }
 
     public List<Board> listBoards(String actor) {
@@ -570,6 +647,10 @@ public final class KanbanService {
 
     private static KanbanException error(KanbanException.Code code, String message) {
         return new KanbanException(code, message);
+    }
+
+    private static KanbanException error(KanbanException.Code code, String message, long currentRevision) {
+        return new KanbanException(code, message, currentRevision);
     }
 
     private record CardMutation(Card card, Board board) {}

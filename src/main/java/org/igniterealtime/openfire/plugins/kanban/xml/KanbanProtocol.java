@@ -10,6 +10,7 @@ import org.igniterealtime.openfire.plugins.kanban.model.Board;
 import org.igniterealtime.openfire.plugins.kanban.model.BoardNodes;
 import org.igniterealtime.openfire.plugins.kanban.model.BoardSnapshot;
 import org.igniterealtime.openfire.plugins.kanban.model.Card;
+import org.igniterealtime.openfire.plugins.kanban.model.CardDiscussionLink;
 import org.igniterealtime.openfire.plugins.kanban.model.CardPriority;
 import org.igniterealtime.openfire.plugins.kanban.model.KanbanColumn;
 import org.igniterealtime.openfire.plugins.kanban.model.Label;
@@ -68,6 +69,7 @@ public final class KanbanProtocol {
                 case "create-label" -> createLabel(request, actor, command);
                 case "update-label" -> updateLabel(request, actor, command);
                 case "delete-label" -> deleteLabel(request, actor, command);
+                case "ensure-card-discussion" -> ensureCardDiscussion(request, actor, command);
                 case "add-member" -> addMember(request, actor, command);
                 case "update-member-role" -> updateMember(request, actor, command);
                 case "remove-member" -> removeMember(request, actor, command);
@@ -169,6 +171,22 @@ public final class KanbanProtocol {
         requireType(request, IQ.Type.set);
         return result(request, service.deleteLabel(actor, required(command, "board-id"),
             required(command, "label-id"), revision(command)));
+    }
+
+    private IQ ensureCardDiscussion(IQ request, String actor, Element command) {
+        requireType(request, IQ.Type.set);
+        final Result<CardDiscussionLink> ensured = service.ensureCardDiscussion(
+            actor, required(command, "board-id"), required(command, "card-id"));
+        final IQ response = IQ.createResultIQ(request);
+        final CardDiscussionLink link = ensured.value();
+        response.setChildElement("result", COMMAND_NAMESPACE)
+            .addAttribute("card-id", link.cardId())
+            .addAttribute("id", link.cardId())
+            .addAttribute("discussion-room", link.discussionRoomJid())
+            .addAttribute("discussion-thread", link.discussionThreadId())
+            .addAttribute("revision", Long.toString(link.cardRevision()))
+            .addAttribute("board-revision", Long.toString(ensured.boardRevision()));
+        return response;
     }
 
     private IQ addMember(IQ request, String actor, Element command) {
@@ -332,6 +350,9 @@ public final class KanbanProtocol {
 
     private static void addBoard(Element element, Board board) {
         element.addAttribute("id", board.id()).addAttribute("revision", Long.toString(board.revision()));
+        if (board.discussionRoomJid() != null && !board.discussionRoomJid().isBlank()) {
+            element.addAttribute("discussion-room", board.discussionRoomJid());
+        }
         element.addElement("name").setText(board.name());
     }
 
@@ -358,6 +379,9 @@ public final class KanbanProtocol {
         if (!card.labelIds().isEmpty()) {
             final Element labels = element.addElement("labels");
             card.labelIds().forEach(labelId -> labels.addElement("label").addAttribute("id", labelId));
+        }
+        if (card.discussionThreadId() != null && !card.discussionThreadId().isBlank()) {
+            element.addElement("discussion-thread").setText(card.discussionThreadId());
         }
     }
 

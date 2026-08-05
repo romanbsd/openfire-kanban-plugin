@@ -154,6 +154,7 @@
                                 <!-- Openfire-runtime adapters require a booted server; the gate covers the portable core. -->
                                 <exclude>**/KanbanPlugin*</exclude>
                                 <exclude>**/pubsub/**</exclude>
+                                <exclude>**/muc/OpenfireBoardDiscussionProvisioner*</exclude>
                             </excludes>
                         </configuration>
                     </execution>

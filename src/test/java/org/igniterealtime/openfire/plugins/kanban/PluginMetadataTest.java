@@ -33,8 +33,10 @@ class PluginMetadataTest {
                 .getNamedItem("url").getNodeValue()
         );
         assertEquals("kanban", document.getElementsByTagName("databaseKey").item(0).getTextContent());
-        assertEquals("1", document.getElementsByTagName("databaseVersion").item(0).getTextContent());
+        assertEquals("2", document.getElementsByTagName("databaseVersion").item(0).getTextContent());
         assertEquals("5.2.0", document.getElementsByTagName("minServerVersion").item(0).getTextContent());
+        assertTrue(Files.isRegularFile(Path.of("src/main/database/upgrade/2/kanban_hsqldb.sql")));
+        assertTrue(Files.isRegularFile(Path.of("src/main/database/upgrade/2/kanban_postgresql.sql")));
         assertTrue(Files.isRegularFile(Path.of("src/web/kanban-settings.jsp")));
         assertTrue(Files.isRegularFile(Path.of("src/web/WEB-INF/web.xml")));
         assertTrue(Files.isRegularFile(Path.of("src/main/i18n/kanban_i18n.properties")));

@@ -1,4 +1,4 @@
-INSERT INTO ofVersion (name, version) VALUES ('kanban', 1);
+INSERT INTO ofVersion (name, version) VALUES ('kanban', 2);
 
 CREATE TABLE ofKanbanBoard (
   boardID VARCHAR(36) NOT NULL,
@@ -8,6 +8,7 @@ CREATE TABLE ofKanbanBoard (
   createdBy VARCHAR(1024) NOT NULL,
   createdAt BIGINT NOT NULL,
   updatedAt BIGINT NOT NULL,
+  discussionRoomJID VARCHAR(1024) NULL,
   CONSTRAINT ofKanbanBoard_pk PRIMARY KEY (boardID)
 );
 
@@ -33,6 +34,7 @@ CREATE TABLE ofKanbanCard (
   description LONGVARCHAR NULL,
   assigneeJID VARCHAR(1024) NULL,
   priority VARCHAR(16) DEFAULT 'NONE' NOT NULL,
+  discussionThreadID VARCHAR(255) NULL,
   deleted INT NOT NULL,
   createdBy VARCHAR(1024) NOT NULL,
   createdAt BIGINT NOT NULL,

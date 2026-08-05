@@ -5,6 +5,8 @@ import java.time.Duration;
 import java.time.Instant;
 import java.util.TimerTask;
 
+import org.igniterealtime.openfire.plugins.kanban.muc.BoardDiscussionProvisioner;
+import org.igniterealtime.openfire.plugins.kanban.muc.OpenfireBoardDiscussionProvisioner;
 import org.igniterealtime.openfire.plugins.kanban.outbox.OutboxWorker;
 import org.igniterealtime.openfire.plugins.kanban.pubsub.OpenfirePubSubPublisher;
 import org.igniterealtime.openfire.plugins.kanban.repository.JdbcKanbanRepository;
@@ -45,10 +47,14 @@ public final class KanbanPlugin implements Plugin {
     public synchronized void initializePlugin(PluginManager manager, File pluginDirectory) {
         repository = new JdbcKanbanRepository(DbConnectionManager::getConnection);
         final String domain = XMPPServer.getInstance().getServerInfo().getXMPPDomain();
+        final String componentBare = "kanban." + domain;
+        final BoardDiscussionProvisioner discussionProvisioner =
+            new OpenfireBoardDiscussionProvisioner(componentBare);
         final KanbanService service = new KanbanService(repository, java.time.Clock.systemUTC(),
             () -> java.util.UUID.randomUUID().toString(), DEFAULT_WIP_LIMIT::getValue,
             actor -> !ADMINS_ONLY_BOARD_CREATION.getValue()
-                || AdminManager.getInstance().isUserAdmin(new JID(actor), false));
+                || AdminManager.getInstance().isUserAdmin(new JID(actor), false),
+            discussionProvisioner);
         final OpenfirePubSubPublisher publisher = new OpenfirePubSubPublisher(new JID("kanban." + domain));
         component = new KanbanComponent(service, "pubsub." + domain, publisher);
         try {
