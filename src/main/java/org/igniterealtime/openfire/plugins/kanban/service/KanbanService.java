@@ -320,13 +320,12 @@ public final class KanbanService {
         String actor, String boardId, String bareJid, Role role, long expectedRevision
     ) {
         final Result<Member> result = repository.transact(transaction -> {
-            final Board board = requireBoardMutation(transaction, boardId, actor, Permission.MEMBERS, expectedRevision);
-            final Member member = transaction.member(boardId, bareJid)
-                .orElseThrow(() -> error(KanbanException.Code.ITEM_NOT_FOUND, "Member not found"));
-            preventFinalOwner(transaction, member, role);
+            final MemberMutation mutation = requireMemberMutation(
+                transaction, boardId, bareJid, actor, role, expectedRevision);
+            final Member member = mutation.member();
             final Member updated = new Member(member.id(), boardId, bareJid, Objects.requireNonNull(role), member.createdAt());
             final long now = clock.millis();
-            incrementBoard(transaction, board, expectedRevision, now);
+            incrementBoard(transaction, mutation.board(), expectedRevision, now);
             transaction.updateMemberRole(member.id(), role);
             appendEvent(transaction, boardId, ActivityType.MEMBER_ROLE_CHANGED,
                 actor, member.id(), memberXml(updated), now, false);
@@ -338,12 +337,11 @@ public final class KanbanService {
 
     public Result<Member> removeMember(String actor, String boardId, String bareJid, long expectedRevision) {
         final Result<Member> result = repository.transact(transaction -> {
-            final Board board = requireBoardMutation(transaction, boardId, actor, Permission.MEMBERS, expectedRevision);
-            final Member member = transaction.member(boardId, bareJid)
-                .orElseThrow(() -> error(KanbanException.Code.ITEM_NOT_FOUND, "Member not found"));
-            preventFinalOwner(transaction, member, null);
+            final MemberMutation mutation = requireMemberMutation(
+                transaction, boardId, bareJid, actor, null, expectedRevision);
+            final Member member = mutation.member();
             final long now = clock.millis();
-            incrementBoard(transaction, board, expectedRevision, now);
+            incrementBoard(transaction, mutation.board(), expectedRevision, now);
             transaction.deleteMember(member.id());
             final long sequence = appendEvent(transaction, boardId, ActivityType.MEMBER_REMOVED,
                 actor, member.id(), memberXml(member), now, false);
@@ -543,6 +541,16 @@ public final class KanbanService {
         return new CardMutation(card, board);
     }
 
+    private static MemberMutation requireMemberMutation(
+        Transaction transaction, String boardId, String bareJid, String actor, Role nextRole, long expectedRevision
+    ) throws SQLException {
+        final Board board = requireBoardMutation(transaction, boardId, actor, Permission.MEMBERS, expectedRevision);
+        final Member member = transaction.member(boardId, bareJid)
+            .orElseThrow(() -> error(KanbanException.Code.ITEM_NOT_FOUND, "Member not found"));
+        preventFinalOwner(transaction, member, nextRole);
+        return new MemberMutation(member, board);
+    }
+
     private static Board requireBoard(Transaction transaction, String boardId) throws SQLException {
         return transaction.board(boardId).orElseThrow(() -> error(KanbanException.Code.ITEM_NOT_FOUND, "Board not found"));
     }
@@ -654,6 +662,8 @@ public final class KanbanService {
     }
 
     private record CardMutation(Card card, Board board) {}
+
+    private record MemberMutation(Member member, Board board) {}
 
     private enum Permission { CREATE, EDIT, DELETE, MEMBERS }
 }

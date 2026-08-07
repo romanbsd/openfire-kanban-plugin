@@ -34,29 +34,24 @@ class OutboxWorkerTest {
 
     @Test
     void failureReturnsItemToPendingWithBackoff() throws Exception {
-        final JdbcKanbanRepository repository = TestDatabase.repository();
-        final Clock clock = Clock.fixed(Instant.ofEpochMilli(10_000), ZoneOffset.UTC);
-        new KanbanService(repository, clock, () -> UUID.randomUUID().toString(), () -> 0, jid -> true)
-            .createBoard("owner@example.org", "Board", 0);
+        final SeededOutbox seeded = seededBoard();
         final AtomicBoolean failed = new AtomicBoolean();
-        final OutboxWorker worker = new OutboxWorker(repository, entry -> {
+        final OutboxWorker worker = new OutboxWorker(seeded.repository, entry -> {
             failed.set(true);
             throw new IllegalStateException("offline");
-        }, clock, "worker");
+        }, seeded.clock, "worker");
 
         worker.run();
 
         assertTrue(failed.get());
-        assertEquals(3, repository.diagnostics(10_000).pending());
-        assertEquals(1, repository.diagnostics(10_001).retrying());
+        assertEquals(3, seeded.repository.diagnostics(10_000).pending());
+        assertEquals(1, seeded.repository.diagnostics(10_001).retrying());
     }
 
     @Test
     void reclaimsExpiredLeasesWithoutBreakingPerBoardOrder() throws Exception {
-        final JdbcKanbanRepository repository = TestDatabase.repository();
-        final Clock clock = Clock.fixed(Instant.ofEpochMilli(10_000), ZoneOffset.UTC);
-        new KanbanService(repository, clock, () -> UUID.randomUUID().toString(), () -> 0, jid -> true)
-            .createBoard("owner@example.org", "Board", 0);
+        final SeededOutbox seeded = seededBoard();
+        final JdbcKanbanRepository repository = seeded.repository;
 
         final OutboxEntry first = repository.claimNext("worker-a", 10_000, 11_000).orElseThrow();
         assertTrue(repository.claimNext("worker-b", 10_500, 12_000).isEmpty());
@@ -71,21 +66,30 @@ class OutboxWorkerTest {
 
     @Test
     void purgesDeliveredHistoryWhileKeepingBoardSequenceMonotonic() throws Exception {
+        final SeededOutbox seeded = seededBoard();
+        new OutboxWorker(seeded.repository, entry -> {}, seeded.clock, "worker").run();
+
+        final var purged = seeded.repository.purgeHistory(15_000);
+        assertEquals(3, purged.outboxRows());
+        assertEquals(1, purged.activityRows());
+
+        seeded.service.createColumn("owner@example.org", seeded.boardId, "Todo", null, 1);
+        final List<OutboxEntry> delivered = new ArrayList<>();
+        new OutboxWorker(seeded.repository, delivered::add, seeded.clock, "worker-2").run();
+        assertEquals(1, delivered.size());
+        assertTrue(delivered.get(0).sequence() > 10);
+    }
+
+    private static SeededOutbox seededBoard() throws Exception {
         final JdbcKanbanRepository repository = TestDatabase.repository();
         final Clock clock = Clock.fixed(Instant.ofEpochMilli(10_000), ZoneOffset.UTC);
         final KanbanService service = new KanbanService(
             repository, clock, () -> UUID.randomUUID().toString(), () -> 0, jid -> true);
         final var board = service.createBoard("owner@example.org", "Board", 0);
-        new OutboxWorker(repository, entry -> {}, clock, "worker").run();
-
-        final var purged = repository.purgeHistory(15_000);
-        assertEquals(3, purged.outboxRows());
-        assertEquals(1, purged.activityRows());
-
-        service.createColumn("owner@example.org", board.value().id(), "Todo", null, 1);
-        final List<OutboxEntry> delivered = new ArrayList<>();
-        new OutboxWorker(repository, delivered::add, clock, "worker-2").run();
-        assertEquals(1, delivered.size());
-        assertTrue(delivered.get(0).sequence() > 10);
+        return new SeededOutbox(repository, clock, service, board.value().id());
     }
+
+    private record SeededOutbox(
+        JdbcKanbanRepository repository, Clock clock, KanbanService service, String boardId
+    ) {}
 }

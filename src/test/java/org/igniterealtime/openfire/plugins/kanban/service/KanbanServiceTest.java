@@ -188,22 +188,21 @@ class KanbanServiceTest {
             () -> String.format("00000000-0000-0000-0000-%012d", ids.incrementAndGet()), () -> 0, actor -> true,
             provisioner);
 
-        final var board = service.createBoard("owner@example.org", "Board", 0);
-        final var column = service.createColumn("owner@example.org", board.value().id(), "Todo", 0, 1);
-        final var card = service.createCard("owner@example.org", board.value().id(), column.value().id(),
-            "Card", null, null, 2);
+        final var seeded = seedBoardWithCard();
+        final var boardId = seeded.boardId();
+        final var cardId = seeded.cardId();
 
-        final var first = service.ensureCardDiscussion("owner@example.org", board.value().id(), card.value().id());
-        assertEquals("board-" + board.value().id() + "@conference.example.org", first.value().discussionRoomJid());
-        assertEquals("kanban-card-" + card.value().id(), first.value().discussionThreadId());
+        final var first = service.ensureCardDiscussion("owner@example.org", boardId, cardId);
+        assertEquals("board-" + boardId + "@conference.example.org", first.value().discussionRoomJid());
+        assertEquals("kanban-card-" + cardId, first.value().discussionThreadId());
         assertEquals(1, provisioner.postedRoots().size());
 
-        final var second = service.ensureCardDiscussion("owner@example.org", board.value().id(), card.value().id());
+        final var second = service.ensureCardDiscussion("owner@example.org", boardId, cardId);
         assertEquals(first.value().discussionRoomJid(), second.value().discussionRoomJid());
         assertEquals(first.value().discussionThreadId(), second.value().discussionThreadId());
         assertEquals(1, provisioner.postedRoots().size());
 
-        final var snapshot = service.snapshot("owner@example.org", board.value().id());
+        final var snapshot = service.snapshot("owner@example.org", boardId);
         assertEquals(first.value().discussionRoomJid(), snapshot.board().discussionRoomJid());
         assertEquals(first.value().discussionThreadId(), snapshot.cards().get(0).discussionThreadId());
         assertEquals(2, provisioner.syncedRooms().size()); // ensureRoom + re-sync on second ensure
@@ -211,13 +210,10 @@ class KanbanServiceTest {
 
     @Test
     void rejectsViewerEnsureCardDiscussion() {
-        final var board = service.createBoard("owner@example.org", "Board", 0);
-        final var column = service.createColumn("owner@example.org", board.value().id(), "Todo", 0, 1);
-        final var card = service.createCard("owner@example.org", board.value().id(), column.value().id(),
-            "Card", null, null, 2);
-        service.addMember("owner@example.org", board.value().id(), "viewer@example.org", Role.VIEWER, 3);
+        final var seeded = seedBoardWithCard();
+        service.addMember("owner@example.org", seeded.boardId(), "viewer@example.org", Role.VIEWER, 3);
         assertCode(Code.FORBIDDEN,
-            () -> service.ensureCardDiscussion("viewer@example.org", board.value().id(), card.value().id()));
+            () -> service.ensureCardDiscussion("viewer@example.org", seeded.boardId(), seeded.cardId()));
     }
 
     @Test
@@ -257,7 +253,17 @@ class KanbanServiceTest {
         }
     }
 
+    private SeededBoard seedBoardWithCard() {
+        final var board = service.createBoard("owner@example.org", "Board", 0);
+        final var column = service.createColumn("owner@example.org", board.value().id(), "Todo", 0, 1);
+        final var card = service.createCard("owner@example.org", board.value().id(), column.value().id(),
+            "Card", null, null, 2);
+        return new SeededBoard(board.value().id(), card.value().id());
+    }
+
     private static void assertCode(Code expected, Runnable operation) {
         assertEquals(expected, assertThrows(KanbanException.class, operation::run).code());
     }
+
+    private record SeededBoard(String boardId, String cardId) {}
 }
