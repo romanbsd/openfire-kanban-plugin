@@ -49,8 +49,6 @@ public final class OpenfireBoardDiscussionProvisioner implements BoardDiscussion
             if (room == null) {
                 throw new IllegalStateException("Unable to create discussion room " + roomJid);
             }
-            room.setNaturalLanguageName(boardName == null || boardName.isBlank() ? roomName : boardName);
-            room.setDescription("Kanban board discussion for " + boardId);
             room.setPersistent(true);
             room.setPublicRoom(false);
             try {
@@ -60,15 +58,31 @@ public final class OpenfireBoardDiscussionProvisioner implements BoardDiscussion
             }
             room.setCanOccupantsChangeSubject(false);
             room.setLogEnabled(true);
+            applyRoomLabels(room, boardName, roomName);
             try {
                 room.saveToDB();
                 room.unlock(Affiliation.owner);
             } catch (Exception exception) {
                 Log.warn("Unable to persist MUC room {}", roomJid, exception);
             }
+        } else {
+            // Refresh human-readable labels on already-provisioned rooms (e.g. older
+            // installs that stored a board id in the description).
+            applyRoomLabels(room, boardName, roomName);
+            try {
+                room.saveToDB();
+            } catch (Exception exception) {
+                Log.warn("Unable to update MUC room labels for {}", roomJid, exception);
+            }
         }
         syncAffiliations(roomJid, members);
         return roomJid;
+    }
+
+    private static void applyRoomLabels(MUCRoom room, String boardName, String roomName) {
+        final String label = boardName == null || boardName.isBlank() ? roomName : boardName.trim();
+        room.setNaturalLanguageName(label);
+        room.setDescription("Kanban board discussion for " + label);
     }
 
     @Override
@@ -91,7 +105,9 @@ public final class OpenfireBoardDiscussionProvisioner implements BoardDiscussion
             // Groupchat must use room/nick; bare room JID is not a valid occupant from
             // and Openfire may skip logging it to MAM.
             message.setFrom(new JID(roomAddress.getNode(), roomAddress.getDomain(), "kanban"));
-            message.setBody("Card: " + (cardTitle == null ? cardId : cardTitle));
+            // Body is the card title — clients show this as the thread headline.
+            final String body = cardTitle == null || cardTitle.isBlank() ? "Card discussion" : cardTitle.trim();
+            message.setBody(body);
             room.broadcast(message);
         } catch (RuntimeException exception) {
             Log.warn("Unable to post discussion root message for card {} in {}", cardId, roomJid, exception);
