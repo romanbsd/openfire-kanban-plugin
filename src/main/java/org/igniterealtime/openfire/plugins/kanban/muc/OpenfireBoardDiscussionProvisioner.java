@@ -88,7 +88,9 @@ public final class OpenfireBoardDiscussionProvisioner implements BoardDiscussion
             message.setID(messageId);
             message.setType(Message.Type.groupchat);
             message.setThread(messageId);
-            message.setFrom(room.getJID());
+            // Groupchat must use room/nick; bare room JID is not a valid occupant from
+            // and Openfire may skip logging it to MAM.
+            message.setFrom(new JID(roomAddress.getNode(), roomAddress.getDomain(), "kanban"));
             message.setBody("Card: " + (cardTitle == null ? cardId : cardTitle));
             room.broadcast(message);
         } catch (RuntimeException exception) {

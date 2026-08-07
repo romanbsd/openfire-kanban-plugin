@@ -27,7 +27,7 @@
     <properties>
         <errorprone.version>2.50.0</errorprone.version>
         <hsqldb.version>2.7.4</hsqldb.version>
-        <jacoco.version>0.8.14</jacoco.version>
+        <jacoco.version>0.8.15</jacoco.version>
         <junit.version>6.1.2</junit.version>
         <maven-compiler-plugin.version>3.15.0</maven-compiler-plugin.version>
         <mockito.version>5.23.0</mockito.version>
