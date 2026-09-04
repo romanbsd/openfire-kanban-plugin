@@ -29,7 +29,7 @@
         <hsqldb.version>2.7.4</hsqldb.version>
         <jacoco.version>0.8.15</jacoco.version>
         <junit.version>6.1.2</junit.version>
-        <maven-compiler-plugin.version>3.15.0</maven-compiler-plugin.version>
+        <maven-compiler-plugin.version>3.16.0</maven-compiler-plugin.version>
         <mockito.version>5.23.0</mockito.version>
         <maven-surefire-plugin.version>3.5.4</maven-surefire-plugin.version>
         <smack.version>4.5.0-rc1</smack.version>
