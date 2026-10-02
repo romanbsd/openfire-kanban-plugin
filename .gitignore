@@ -4,3 +4,4 @@ target/
 .DS_Store
 .codegraph/
 .codebase-memory/
+.serena/
